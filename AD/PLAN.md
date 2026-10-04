@@ -111,7 +111,7 @@ src/
 
 ## 7. Phased Implementation Roadmap
 
-- [ ] **Phase 1: Reader Engine & Page-Flip**
+- [x] **Phase 1: Reader Engine & Page-Flip**
   - Implement single-page physical flip mechanics (CSS 3D transforms + touch/keyboard handlers).
   - Setup basic book navigation controls, progress indicator, and sound effects toggle.
 - [ ] **Phase 2: Content Model & Layout Components**
