@@ -4,66 +4,111 @@ import {
 	playBookOpenSound,
 	playBookCloseSound
 } from '../audio/sfx';
-import type { FlipDirection, BookUIState } from '../types/book';
+import type { BookUIState, FlipDirection, PageSide, ViewMode } from '../types/book';
 
-/** Duration of the 3D page turn, in milliseconds. */
-const TURN_DURATION = 820;
+/**
+ * Reading position and book state for the top-down 2D book.
+ *
+ * The position is a spread plus a side: `spreadIndex` is the open two-page
+ * spread (0-based), `side` refines it for the mobile single-page view. The
+ * committed position only changes when a turn or slide *finishes* (the scene
+ * calls {@link BookStore.completeTransition} on animation end); while a
+ * transition runs the target lives in `pending`.
+ *
+ * Transitions are CSS-driven, so the store keeps no per-frame progress:
+ * flip/slide semantics live in the components, here we own position, input
+ * gating, SFX and persistence.
+ */
 
-const easeInOutCubic = (t: number): number =>
-	t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const OPEN_DURATION = 850;
 
-class BookStore {
-	currentPageIndex = $state<number>(0);
-	totalPages = $state<number>(0);
+const POSITION_KEY = 'plateia_position';
+/** Pre-refactor key, read once to migrate the last-read page. */
+const LEGACY_PAGE_KEY = 'plateia_page_index';
+
+export class BookStore {
+	/* ---------------- Position ---------------- */
+
+	spreadIndex = $state<number>(0);
+	side = $state<PageSide>('left');
+
+	/* ---------------- View ---------------- */
+
+	/** Track of viewport width; only changes while the book is idle. */
+	mode = $state<ViewMode>('spread');
+	/** 'closed' | 'opening' | 'opened' | 'closing' (cover transitions). */
+	bookUIState = $state<BookUIState>('closed');
 	isFlipping = $state<boolean>(false);
 	flipDirection = $state<FlipDirection>('next');
+	/** Position the in-flight turn/slide is heading to; null when idle. */
+	pending = $state<{ spreadIndex: number; side: PageSide } | null>(null);
+
+	/* ---------------- Content & prefs ---------------- */
+
+	totalPages = $state<number>(0);
 	audioEnabled = $state<boolean>(true);
 	isTableOfContentsOpen = $state<boolean>(false);
-
-	// 3D Book Viewport States: 'closed' | 'opening' | 'opened' | 'closing'
-	bookUIState = $state<BookUIState>('closed');
-	isBookOpen = $state<boolean>(false);
-
-	/** Progress of the turning sheet: 0 = right side, 1 = left side. */
-	flipProgress = $state<number>(0);
-	/** Page the turn is heading towards, or null when idle. */
-	flipTargetIndex = $state<number | null>(null);
-	/** Hit region the pointer (or keyboard focus) is currently on. */
-	hoverRegionId = $state<string | null>(null);
 	/** Interactive answers, keyed by page id. */
 	selectedOptions = $state<Record<string, string>>({});
 
-	// Derived state
-	progressPercent = $derived(
-		this.totalPages > 1 ? Math.round((this.currentPageIndex / (this.totalPages - 1)) * 100) : 0
-	);
-
-	canGoPrev = $derived(this.currentPageIndex > 0 && !this.isFlipping && this.isBookOpen);
-	canGoNext = $derived(
-		this.currentPageIndex < this.totalPages - 1 && !this.isFlipping && this.isBookOpen
-	);
-
-	private turnFrame: number | null = null;
 	private pageIds: string[] = [];
+
+	/* ---------------- Derived ---------------- */
+
+	totalSpreads = $derived(Math.ceil(this.totalPages / 2));
+
+	isBookOpen = $derived(this.bookUIState === 'opened');
+
+	/** 0-based index of the page shown on the mobile side (or the spread's left page). */
+	pageIndexOfSide = $derived(this.spreadIndex * 2 + (this.side === 'right' ? 1 : 0));
+
+	/**
+	 * Reading progress for the bar: per page in single mode, per spread in
+	 * spread mode (the whole spread counts as one step on desktop).
+	 */
+	progressPercent = $derived.by(() => {
+		if (this.mode === 'single') {
+			return this.totalPages > 1
+				? Math.round((this.pageIndexOfSide / (this.totalPages - 1)) * 100)
+				: 0;
+		}
+		return this.totalSpreads > 1
+			? Math.round((this.spreadIndex / (this.totalSpreads - 1)) * 100)
+			: 0;
+	});
+
+	canGoPrev = $derived(this.isBookOpen && !this.isFlipping && this.previousPosition() !== null);
+	canGoNext = $derived(this.isBookOpen && !this.isFlipping && this.nextPosition() !== null);
 
 	constructor() {
 		if (typeof window !== 'undefined') {
 			try {
-				const savedPage = localStorage.getItem('plateia_page_index');
-				if (savedPage !== null) {
-					const parsed = parseInt(savedPage, 10);
-					if (!isNaN(parsed) && parsed >= 0) {
-						this.currentPageIndex = parsed;
+				const raw = localStorage.getItem(POSITION_KEY);
+				if (raw !== null) {
+					const pos = JSON.parse(raw) as { spread?: unknown; side?: unknown };
+					if (
+						typeof pos.spread === 'number' &&
+						Number.isInteger(pos.spread) &&
+						pos.spread >= 0 &&
+						(pos.side === 'left' || pos.side === 'right')
+					) {
+						this.spreadIndex = pos.spread;
+						this.side = pos.side;
+					}
+				} else {
+					// Migrate the pre-refactor single-page position.
+					const legacy = localStorage.getItem(LEGACY_PAGE_KEY);
+					if (legacy !== null) {
+						const parsed = parseInt(legacy, 10);
+						if (!isNaN(parsed) && parsed >= 0) {
+							this.spreadIndex = Math.floor(parsed / 2);
+							this.side = parsed % 2 === 1 ? 'right' : 'left';
+						}
 					}
 				}
 				const savedAudio = localStorage.getItem('plateia_audio_enabled');
 				if (savedAudio !== null) {
 					this.audioEnabled = savedAudio === 'true';
-				}
-				const savedOpen = localStorage.getItem('plateia_book_open');
-				if (savedOpen === 'true') {
-					this.isBookOpen = true;
-					this.bookUIState = 'opened';
 				}
 				const savedOptions = localStorage.getItem('plateia_selected_options');
 				if (savedOptions !== null) {
@@ -78,33 +123,33 @@ class BookStore {
 		}
 	}
 
-	setTotalPages(count: number) {
-		this.totalPages = count;
-		if (this.currentPageIndex >= count && count > 0) {
-			this.currentPageIndex = count - 1;
-		}
-	}
+	/* ---------------- Content registration ---------------- */
 
-	/** Registers the book contents so per-page answers can be stored by id. */
 	registerPages(pages: { id: string }[]) {
 		this.pageIds = pages.map((page) => page.id);
-		this.setTotalPages(pages.length);
-	}
-
-	setHoverRegion(id: string | null) {
-		this.hoverRegionId = id;
-	}
-
-	/** Records the answer given on the current interactive page. */
-	selectOption(optionId: string) {
-		const pageId = this.pageIds[this.currentPageIndex];
-		if (!pageId) return;
-		this.selectedOptions[pageId] = optionId;
-		this.persistOptions();
-		if (this.audioEnabled) {
-			playSoftClickSound(0.1);
+		this.totalPages = pages.length;
+		const last = Math.max(this.totalSpreads - 1, 0);
+		if (this.spreadIndex > last) {
+			this.spreadIndex = last;
 		}
 	}
+
+	/* ---------------- View mode ---------------- */
+
+	/**
+	 * Switches spread/single framing. Ignored mid-transition: the
+	 * in-flight animation was mounted for one framing, so the scene
+	 * re-evaluates on the next (continuous) resize event once it
+	 * settles. Allowed while the cover opens/closes — the open
+	 * layer is animating in or out anyway.
+	 */
+	setMode(mode: ViewMode) {
+		if (mode === this.mode) return;
+		if (this.isFlipping) return;
+		this.mode = mode;
+	}
+
+	/* ---------------- Book open / close ---------------- */
 
 	openBook() {
 		if (this.isBookOpen || this.bookUIState === 'opening') return;
@@ -114,12 +159,10 @@ class BookStore {
 			playBookOpenSound();
 		}
 
-		// Animation matches cover hinge opening & camera zoom duration (~850ms)
+		// Matches the CSS open transition (cover sweep + dolly, ~850ms).
 		setTimeout(() => {
-			this.isBookOpen = true;
 			this.bookUIState = 'opened';
-			this.persistBookOpenState();
-		}, 850);
+		}, OPEN_DURATION);
 	}
 
 	closeBook() {
@@ -130,73 +173,84 @@ class BookStore {
 			playBookCloseSound();
 		}
 
-		// Animation matches camera dolly-out & cover closing duration (~850ms)
 		setTimeout(() => {
-			this.isBookOpen = false;
 			this.bookUIState = 'closed';
-			this.persistBookOpenState();
-		}, 850);
+		}, OPEN_DURATION);
 	}
 
-	nextPage() {
-		if (!this.canGoNext) return;
-		this.turnToPage(this.currentPageIndex + 1, 'next');
+	/* ---------------- Navigation ---------------- */
+
+	/** One step forward in reading order for the current view mode. */
+	next() {
+		const target = this.nextPosition();
+		if (!target) return;
+		this.beginTransition(target, 'next');
 	}
 
-	prevPage() {
-		if (!this.canGoPrev) return;
-		this.turnToPage(this.currentPageIndex - 1, 'prev');
+	/** One step back in reading order for the current view mode. */
+	prev() {
+		const target = this.previousPosition();
+		if (!target) return;
+		this.beginTransition(target, 'prev');
 	}
 
-	goToPage(targetIndex: number) {
-		if (targetIndex === this.currentPageIndex || this.isFlipping) return;
-		if (targetIndex < 0 || targetIndex >= this.totalPages) return;
+	/**
+	 * Jumps to the spread containing `pageIndex` (0-based); in single mode it
+	 * also lands on that page's side. Far jumps animate as one leaf.
+	 */
+	goToPage(pageIndex: number) {
+		if (this.isFlipping || this.bookUIState !== 'opened') return;
+		if (!Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= this.totalPages) return;
 
-		const dir: FlipDirection = targetIndex > this.currentPageIndex ? 'next' : 'prev';
-		this.turnToPage(targetIndex, dir);
-	}
+		const spread = Math.floor(pageIndex / 2);
+		const side: PageSide = pageIndex % 2 === 0 ? 'left' : 'right';
+		const target = { spreadIndex: spread, side };
 
-	private turnToPage(targetIndex: number, direction: FlipDirection) {
-		this.flipDirection = direction;
-		this.isFlipping = true;
-		this.flipTargetIndex = targetIndex;
-
-		if (this.audioEnabled) {
-			playPaperFlipSound(direction);
+		const unchanged = spread === this.spreadIndex && (this.mode === 'spread' || side === this.side);
+		if (unchanged) {
+			this.side = side;
+			return;
 		}
 
-		// Drive the 3D sheet from right to left on `next`, and back on `prev`.
-		const from = direction === 'next' ? 0 : 1;
-		const to = direction === 'next' ? 1 : 0;
-		// Seed the sweep synchronously. The render loop re-registers its own
-		// animation frame at the top of the frame it is drawing, so it is
-		// always queued ahead of the `step` callback registered here by the
-		// click: without this the first frame is drawn with the *previous*
-		// turn's final progress, which teleports the sheet to its landing
-		// pose for a frame and flashes the wrong side of the paper.
-		this.flipProgress = from;
-		const started = performance.now();
-		if (this.turnFrame !== null) cancelAnimationFrame(this.turnFrame);
-
-		const step = (now: number) => {
-			const linear = Math.min(1, (now - started) / TURN_DURATION);
-			this.flipProgress = from + (to - from) * easeInOutCubic(linear);
-
-			if (linear < 1) {
-				this.turnFrame = requestAnimationFrame(step);
-				return;
-			}
-
-			this.turnFrame = null;
-			this.flipProgress = to;
-			this.currentPageIndex = targetIndex;
-			this.isFlipping = false;
-			this.flipTargetIndex = null;
-			this.persistState();
-		};
-
-		this.turnFrame = requestAnimationFrame(step);
+		const direction: FlipDirection = this.isForwardJump(target, spread, side) ? 'next' : 'prev';
+		this.beginTransition(target, direction);
 	}
+
+	/**
+	 * Called by the scene when the turn or slide animation has finished;
+	 * commits the pending position and persists it.
+	 */
+	completeTransition() {
+		if (!this.isFlipping || !this.pending) return;
+		this.spreadIndex = this.pending.spreadIndex;
+		this.side = this.pending.side;
+		this.pending = null;
+		this.isFlipping = false;
+		this.persistPosition();
+	}
+
+	/* ---------------- Interactive content ---------------- */
+
+	/** Records an answer on the given page (called by in-page controls). */
+	selectOptionForPage(pageId: string, optionId: string) {
+		if (!this.pageIds.includes(pageId)) return;
+		this.selectedOptions[pageId] = optionId;
+		this.persistOptions();
+		if (this.audioEnabled) {
+			playSoftClickSound(0.1);
+		}
+	}
+
+	/** Whether the page is currently on the reader's view (TOC highlight). */
+	isPageVisible(pageIndex: number): boolean {
+		if (pageIndex < 0 || pageIndex >= this.totalPages) return false;
+		if (this.mode === 'single') {
+			return pageIndex === this.pageIndexOfSide;
+		}
+		return Math.floor(pageIndex / 2) === this.spreadIndex;
+	}
+
+	/* ---------------- Audio / TOC ---------------- */
 
 	toggleAudio() {
 		this.audioEnabled = !this.audioEnabled;
@@ -219,33 +273,87 @@ class BookStore {
 		}
 	}
 
-	private persistState() {
-		if (typeof window !== 'undefined') {
-			try {
-				localStorage.setItem('plateia_page_index', String(this.currentPageIndex));
-			} catch {
-				// Local storage might not be accessible
+	/* ---------------- Position steps ---------------- */
+
+	/**
+	 * The position one step forward in reading order, or null at the end.
+	 * Spread mode jumps whole spreads; single mode walks page by page
+	 * (left → right is a slide, right → next left is a leaf).
+	 */
+	private nextPosition(): { spreadIndex: number; side: PageSide } | null {
+		if (this.mode === 'single') {
+			if (this.side === 'left') {
+				return { spreadIndex: this.spreadIndex, side: 'right' };
 			}
+			if (this.spreadIndex >= this.totalSpreads - 1) return null;
+			return { spreadIndex: this.spreadIndex + 1, side: 'left' };
+		}
+		if (this.spreadIndex >= this.totalSpreads - 1) return null;
+		return { spreadIndex: this.spreadIndex + 1, side: 'left' };
+	}
+
+	/**
+	 * The position one step back in reading order, or null at the start.
+	 * The exact inverse of {@link nextPosition}.
+	 */
+	private previousPosition(): { spreadIndex: number; side: PageSide } | null {
+		if (this.mode === 'single') {
+			if (this.side === 'right') {
+				return { spreadIndex: this.spreadIndex, side: 'left' };
+			}
+			if (this.spreadIndex === 0) return null;
+			return { spreadIndex: this.spreadIndex - 1, side: 'right' };
+		}
+		if (this.spreadIndex === 0) return null;
+		return { spreadIndex: this.spreadIndex - 1, side: 'right' };
+	}
+
+	private isForwardJump(
+		target: { spreadIndex: number; side: PageSide },
+		spread: number,
+		side: PageSide
+	): boolean {
+		if (spread > this.spreadIndex) return true;
+		if (spread < this.spreadIndex) return false;
+		return side === 'right' && this.side === 'left';
+	}
+
+	private beginTransition(
+		target: { spreadIndex: number; side: PageSide },
+		direction: FlipDirection
+	) {
+		this.flipDirection = direction;
+		this.pending = target;
+		this.isFlipping = true;
+
+		// Rustle for a leaf crossing the spine — that only happens in
+		// spread mode. The mobile view slides through the facing pages,
+		// so its steps stay quiet.
+		if (this.audioEnabled && this.mode === 'spread') {
+			playPaperFlipSound(direction);
 		}
 	}
 
-	private persistBookOpenState() {
-		if (typeof window !== 'undefined') {
-			try {
-				localStorage.setItem('plateia_book_open', String(this.isBookOpen));
-			} catch {
-				// Local storage might not be accessible
-			}
+	/* ---------------- Persistence ---------------- */
+
+	private persistPosition() {
+		if (typeof window === 'undefined') return;
+		try {
+			localStorage.setItem(
+				POSITION_KEY,
+				JSON.stringify({ spread: this.spreadIndex, side: this.side })
+			);
+		} catch {
+			// Local storage might not be accessible
 		}
 	}
 
 	private persistOptions() {
-		if (typeof window !== 'undefined') {
-			try {
-				localStorage.setItem('plateia_selected_options', JSON.stringify(this.selectedOptions));
-			} catch {
-				// Local storage might not be accessible
-			}
+		if (typeof window === 'undefined') return;
+		try {
+			localStorage.setItem('plateia_selected_options', JSON.stringify(this.selectedOptions));
+		} catch {
+			// Local storage might not be accessible
 		}
 	}
 }

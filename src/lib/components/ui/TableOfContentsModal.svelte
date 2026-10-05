@@ -43,16 +43,16 @@
 			<div
 				class="flex items-center justify-between border-b border-stone-200 bg-stone-100/70 px-6 py-4"
 			>
-				<div>
-					<h3 class="font-serif text-lg font-bold text-stone-900">
+				<div class="min-w-0 flex-1">
+					<h3 class="truncate font-serif text-lg font-bold text-stone-900">
 						{bookUiCopy.tableOfContents.heading}
 					</h3>
-					<p class="text-xs text-stone-500">{bookUiCopy.tableOfContents.subtitle}</p>
+					<p class="truncate text-xs text-stone-500">{bookUiCopy.tableOfContents.subtitle}</p>
 				</div>
 				<button
 					type="button"
 					onclick={() => bookStore.toggleTableOfContents(false)}
-					class="cursor-pointer rounded-full p-1.5 text-stone-500 transition-colors hover:bg-stone-200 hover:text-stone-800"
+					class="shrink-0 cursor-pointer rounded-full p-1.5 text-stone-500 transition-colors hover:bg-stone-200 hover:text-stone-800"
 					aria-label={bookUiCopy.tableOfContents.closeLabel}
 				>
 					<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -72,25 +72,28 @@
 					<button
 						type="button"
 						onclick={() => jumpToPage(index)}
-						class="group flex w-full cursor-pointer items-center justify-between rounded-xl border p-3 text-left transition-all {bookStore.currentPageIndex ===
-						index
+						class="group flex w-full cursor-pointer items-center justify-between rounded-xl border p-3 text-left transition-all {bookStore.isPageVisible(
+							index
+						)
 							? 'border-amber-500/80 bg-amber-100/70 shadow-xs'
 							: 'border-stone-200/90 bg-white hover:bg-stone-50'}"
 					>
-						<div class="flex items-center gap-3">
+						<div class="flex min-w-0 flex-1 items-center gap-3">
 							<span
-								class="flex h-7 w-7 items-center justify-center rounded-full font-mono text-xs font-semibold transition-colors {bookStore.currentPageIndex ===
-								index
+								class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full font-mono text-xs font-semibold transition-colors {bookStore.isPageVisible(
+									index
+								)
 									? 'bg-amber-700 text-amber-50'
 									: 'bg-stone-100 text-stone-600 group-hover:bg-stone-200'}"
 							>
 								{page.pageNumber}
 							</span>
 
-							<div>
-								<div class="flex items-center gap-2">
+							<div class="min-w-0 flex-1">
+								<div class="flex min-w-0 items-center gap-2">
 									<h4
-										class="font-serif text-sm font-semibold text-stone-900 group-hover:text-amber-900"
+										class="min-w-0 truncate font-serif text-sm font-semibold text-stone-900 group-hover:text-amber-900"
+										title={page.title ?? ''}
 									>
 										{page.title ||
 											(page.type === 'cover'
@@ -99,22 +102,22 @@
 									</h4>
 									{#if page.type === 'interactive'}
 										<span
-											class="rounded bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold tracking-wider text-emerald-800 uppercase"
+											class="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold tracking-wider text-emerald-800 uppercase"
 										>
 											{bookUiCopy.tableOfContents.interactiveBadge}
 										</span>
 									{/if}
 								</div>
 								{#if page.subtitle}
-									<p class="max-w-xs truncate text-xs text-stone-500">{page.subtitle}</p>
+									<p class="truncate text-xs text-stone-500">{page.subtitle}</p>
 								{:else if page.chapterTitle}
-									<p class="text-xs text-stone-500">{page.chapterTitle}</p>
+									<p class="truncate text-xs text-stone-500">{page.chapterTitle}</p>
 								{/if}
 							</div>
 						</div>
 
-						<div class="text-stone-400 transition-colors group-hover:text-amber-700">
-							{#if bookStore.currentPageIndex === index}
+						<div class="shrink-0 text-stone-400 transition-colors group-hover:text-amber-700">
+							{#if bookStore.isPageVisible(index)}
 								<span class="text-xs font-medium text-amber-800"
 									>{bookUiCopy.tableOfContents.readingNow}</span
 								>

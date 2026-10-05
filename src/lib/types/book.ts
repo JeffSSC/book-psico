@@ -37,7 +37,6 @@ export interface ReferenceItem {
 export interface AuthorProfile {
 	name: string;
 	role: string;
-	bio: string;
 	avatarText?: string;
 }
 
@@ -72,6 +71,12 @@ export type BookPage = BasePageData;
 export type FlipDirection = 'next' | 'prev';
 export type BookUIState = 'closed' | 'opening' | 'opened' | 'closing';
 
+/** Which page of the open spread the mobile single-page view is showing. */
+export type PageSide = 'left' | 'right';
+
+/** How the open book is framed: two-page spread or a single zoomed page. */
+export type ViewMode = 'spread' | 'single';
+
 /* ------------------------------------------------------------------ */
 /* Book-level copy                                                      */
 /* ------------------------------------------------------------------ */
@@ -91,7 +96,7 @@ export interface BookMeta {
 		title: string;
 		description: string;
 	};
-	/** Gold foil lettering baked into the 3D front board. */
+	/** Gold foil lettering of the front cover. */
 	cover: {
 		badge: string;
 		/** Stacked top to bottom under the cover's eye motif. */

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Book3DExperience, bookMeta, bookPages } from '#lib';
+	import { BookScene, bookMeta, bookPages } from '#lib';
 </script>
 
 <svelte:head>
@@ -8,6 +8,6 @@
 </svelte:head>
 
 <main class="relative h-[100dvh] h-screen w-full overflow-hidden bg-[#FAF8F5]">
-	<!-- 3D BOOK EXPERIENCE & HYBRID DOM READER -->
-	<Book3DExperience pages={bookPages} />
+	<!-- 2D TOP-DOWN BOOK EXPERIENCE -->
+	<BookScene pages={bookPages} />
 </main>

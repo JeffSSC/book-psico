@@ -8,12 +8,12 @@ import type { BookUiCopy } from '../types/book';
  * expanded with {@link fillCopy}.
  */
 export const bookUiCopy: BookUiCopy = {
-	/** Overlay floating above the closed book on the 3D desk. */
+	/** Overlay floating above the closed book on the reading desk. */
 	experience: {
-		regionLabel: 'Livro 3D {title} sobre a mesa de leitura',
+		regionLabel: 'Livro {title} sobre a mesa de leitura',
 		openLabel: 'Abrir Livro',
 		openButtonLabel: 'Abrir livro sobre a mesa',
-		openHint: 'Clique no livro ou no botão para abrir sobre a mesa',
+		openHint: 'Clique no livro para abrir',
 		clickToOpenLabel: 'Clique para abrir o livro'
 	},
 
@@ -57,7 +57,7 @@ export const bookUiCopy: BookUiCopy = {
 	/** Flat DOM reader chrome. */
 	reader: {
 		regionLabel: 'Página do Livro',
-		closeTitle: 'Fechar livro e ver capa em 3D (Esc)',
+		closeTitle: 'Fechar o livro e voltar à capa (Esc)',
 		closeLabel: 'Fechar Livro',
 		previousRegionLabel: 'Página anterior',
 		nextRegionLabel: 'Próxima página'

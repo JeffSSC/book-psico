@@ -3,7 +3,11 @@
 	import { bookUiCopy, fillCopy } from '../../data/uiCopy';
 
 	let progressPercent = $derived(bookStore.progressPercent);
-	let currentPageNumber = $derived(bookStore.currentPageIndex + 1);
+	/** In spread mode the spread counts as its left page; in single
+	 *  mode the counter follows the page on screen. */
+	let currentPageNumber = $derived(
+		bookStore.mode === 'single' ? bookStore.pageIndexOfSide + 1 : bookStore.spreadIndex * 2 + 1
+	);
 	let totalPagesCount = $derived(bookStore.totalPages);
 </script>
 
@@ -14,7 +18,7 @@
 			<!-- Prev Button -->
 			<button
 				type="button"
-				onclick={() => bookStore.prevPage()}
+				onclick={() => bookStore.prev()}
 				disabled={!bookStore.canGoPrev}
 				class="group flex cursor-pointer items-center gap-1.5 rounded-lg border px-3.5 py-1.5 text-xs font-medium shadow-2xs transition-all active:scale-95 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-35 {bookStore.canGoPrev
 					? 'border-stone-300 bg-stone-100 text-stone-800 hover:bg-stone-200'
@@ -53,7 +57,7 @@
 			<!-- Next Button -->
 			<button
 				type="button"
-				onclick={() => bookStore.nextPage()}
+				onclick={() => bookStore.next()}
 				disabled={!bookStore.canGoNext}
 				class="group flex cursor-pointer items-center gap-1.5 rounded-lg border px-3.5 py-1.5 text-xs font-medium shadow-2xs transition-all active:scale-95 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-35 {bookStore.canGoNext
 					? 'border-stone-300 bg-stone-100 text-stone-800 hover:bg-stone-200'
