@@ -179,9 +179,11 @@
 							<div class="space-y-0.5">
 								<h3 class="font-serif text-sm font-bold text-stone-900">{author.name}</h3>
 								<p class="font-sans text-xs font-medium text-amber-800">{author.role}</p>
-								<p class="font-serif text-[13px] leading-relaxed text-stone-600">
-									{author.bio}
-								</p>
+								{#if author.avatarText}
+									<p class="font-serif text-[13px] leading-relaxed text-stone-600">
+										{author.avatarText}
+									</p>
+								{/if}
 							</div>
 						</div>
 					{/each}

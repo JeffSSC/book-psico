@@ -21,6 +21,14 @@ import type { BookUIState, FlipDirection, PageSide, ViewMode } from '../types/bo
  */
 
 const OPEN_DURATION = 850;
+/**
+ * Safety net for the turn/slide commit. The animation (340ms slide,
+ * 700ms leaf) is longer than this only if the browser refuses to run
+ * it (hidden tab, node unmounted mid-turn). If the transitionend
+ * never arrives, the position is committed anyway so navigation can
+ * never deadlock with the buttons stuck disabled.
+ */
+const FLIP_SAFETY_MS = 950;
 
 const POSITION_KEY = 'plateia_position';
 /** Pre-refactor key, read once to migrate the last-read page. */
@@ -180,8 +188,14 @@ export class BookStore {
 
 	/* ---------------- Navigation ---------------- */
 
-	/** One step forward in reading order for the current view mode. */
+	/**
+	 * One step forward in reading order for the current view mode.
+	 * Steps arriving mid-transition are ignored — the in-flight move
+	 * is still what the reader asked for, and re-targeting it would
+	 * race the running animation.
+	 */
 	next() {
+		if (this.bookUIState !== 'opened' || this.isFlipping) return;
 		const target = this.nextPosition();
 		if (!target) return;
 		this.beginTransition(target, 'next');
@@ -189,6 +203,7 @@ export class BookStore {
 
 	/** One step back in reading order for the current view mode. */
 	prev() {
+		if (this.bookUIState !== 'opened' || this.isFlipping) return;
 		const target = this.previousPosition();
 		if (!target) return;
 		this.beginTransition(target, 'prev');
@@ -221,7 +236,8 @@ export class BookStore {
 	 * commits the pending position and persists it.
 	 */
 	completeTransition() {
-		if (!this.isFlipping || !this.pending) return;
+		if (!this.pending) return;
+		this.clearFlipSafety();
 		this.spreadIndex = this.pending.spreadIndex;
 		this.side = this.pending.side;
 		this.pending = null;
@@ -318,6 +334,8 @@ export class BookStore {
 		return side === 'right' && this.side === 'left';
 	}
 
+	private flipSafetyTimer: ReturnType<typeof setTimeout> | null = null;
+
 	private beginTransition(
 		target: { spreadIndex: number; side: PageSide },
 		direction: FlipDirection
@@ -331,6 +349,19 @@ export class BookStore {
 		// so its steps stay quiet.
 		if (this.audioEnabled && this.mode === 'spread') {
 			playPaperFlipSound(direction);
+		}
+
+		// The commit normally arrives via transitionend; if the browser
+		// loses it (hidden tab, the node unmounting mid-move), commit
+		// anyway so the controls can never stay disabled forever.
+		this.clearFlipSafety();
+		this.flipSafetyTimer = setTimeout(() => this.completeTransition(), FLIP_SAFETY_MS);
+	}
+
+	private clearFlipSafety() {
+		if (this.flipSafetyTimer !== null) {
+			clearTimeout(this.flipSafetyTimer);
+			this.flipSafetyTimer = null;
 		}
 	}
 
