@@ -9,11 +9,6 @@ export const page12Authors: BasePageData = {
 	subtitle: 'Pesquisa, redação e concepção da obra',
 	authors: [
 		{
-			name: 'Dra. Erica Beluzzo',
-			role: 'Psicóloga Clínica & Pesquisadora',
-			avatarText: 'EB'
-		},
-		{
 			name: 'Equipe Editorial Plateia Imaginária',
 			role: 'Curadoria Científica & Design Editorial',
 			avatarText: 'PI'
