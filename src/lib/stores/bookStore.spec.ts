@@ -1,31 +1,61 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { playPaperFlipSound } from '../audio/sfx';
 import { BookStore } from './bookStore.svelte';
 
+vi.mock('../audio/sfx', () => ({ playPaperFlipSound: vi.fn() }));
+
 /**
- * The store owns the 2D position model: a spread plus a mobile side.
+ * The store owns the position model: a spread plus a side for the phone.
  * Transitions are pending until the scene commits them (CSS-driven), so the
  * tests assert the pending/commit split rather than any per-frame progress.
  */
 
-const PAGES = Array.from({ length: 12 }, (_, i) => ({
-	id: `page-${String(i + 1).padStart(2, '0')}`
-}));
+const side = (i: number) => ({ id: `side-${String(i).padStart(2, '0')}` });
 
-function makeStore() {
+/** Twelve sides, all filled: six plain spreads. */
+const PAGES = Array.from({ length: 12 }, (_, i) => side(i));
+
+/**
+ * A book as the reader lays it out: the cover alone on the right of the
+ * first spread, four pages, the back cover alone on the left of the last.
+ */
+const BOOK = [null, side(1), side(2), side(3), side(4), side(5), side(6), null];
+const COVER = { spreadIndex: 0, side: 'right' };
+const BACK_COVER = { spreadIndex: 3, side: 'left' };
+
+function installStorage(initial: Record<string, string> = {}) {
+	const backing = new Map(Object.entries(initial));
+	const localStorageStub = {
+		getItem: (key: string) => (backing.has(key) ? (backing.get(key) ?? null) : null),
+		setItem: (key: string, value: string) => {
+			backing.set(key, value);
+		},
+		removeItem: (key: string) => {
+			backing.delete(key);
+		}
+	};
+	Object.defineProperty(globalThis, 'localStorage', {
+		value: localStorageStub,
+		configurable: true
+	});
+	Object.defineProperty(globalThis, 'window', { value: {}, configurable: true });
+	return backing;
+}
+
+function makeStore(sides: ({ id: string } | null)[] = PAGES) {
 	const store = new BookStore();
-	store.registerPages(PAGES);
+	store.registerPages(sides);
 	return store;
 }
 
-function open(store: BookStore) {
-	store.bookUIState = 'opened';
-}
+const position = (store: BookStore) => ({ spreadIndex: store.spreadIndex, side: store.side });
 
 describe('BookStore position model', () => {
 	let store: BookStore;
 
 	beforeEach(() => {
 		store = makeStore();
+		vi.mocked(playPaperFlipSound).mockClear();
 	});
 
 	afterEach(() => {
@@ -45,21 +75,16 @@ describe('BookStore position model', () => {
 		expect(store.spreadIndex).toBe(1);
 	});
 
+	it('starts on the cover, not on the empty side beside it', () => {
+		expect(position(makeStore(BOOK))).toEqual(COVER);
+	});
+
 	describe('spread mode', () => {
 		beforeEach(() => {
 			store.mode = 'spread';
-			open(store);
-		});
-
-		it('cannot go back on the first spread', () => {
-			expect(store.canGoPrev).toBe(false);
-			store.prev();
-			expect(store.pending).toBeNull();
-			expect(store.isFlipping).toBe(false);
 		});
 
 		it('next() pends the whole spread and commits on completeTransition()', () => {
-			expect(store.canGoNext).toBe(true);
 			store.next();
 			expect(store.isFlipping).toBe(true);
 			expect(store.flipDirection).toBe('next');
@@ -83,45 +108,40 @@ describe('BookStore position model', () => {
 			expect(store.side).toBe('right');
 		});
 
-		it('cannot go past the last spread', () => {
-			store.spreadIndex = 5;
-			expect(store.canGoNext).toBe(false);
-			store.next();
-			expect(store.pending).toBeNull();
-		});
-
 		it('completeTransition() without a pending target is a no-op', () => {
 			store.spreadIndex = 2;
 			store.completeTransition();
 			expect(store.spreadIndex).toBe(2);
 			expect(store.isFlipping).toBe(false);
 		});
+
+		it('a step arriving mid-turn is ignored', () => {
+			store.next();
+			store.next();
+			store.prev();
+			expect(store.pending).toEqual({ spreadIndex: 1, side: 'left' });
+		});
 	});
 
 	describe('single mode', () => {
 		beforeEach(() => {
 			store.mode = 'single';
-			open(store);
 		});
 
-		it('next() first slides to the right page of the spread', () => {
+		it('next() first turns to the right page of the spread', () => {
 			store.spreadIndex = 0;
 			store.side = 'left';
 			store.next();
 			expect(store.pending).toEqual({ spreadIndex: 0, side: 'right' });
 			store.completeTransition();
-			expect(store.spreadIndex).toBe(0);
 			expect(store.side).toBe('right');
 		});
 
-		it('next() then leafs to the next spread, left side', () => {
+		it('next() then turns to the next spread, left side', () => {
 			store.spreadIndex = 0;
 			store.side = 'right';
 			store.next();
 			expect(store.pending).toEqual({ spreadIndex: 1, side: 'left' });
-			store.completeTransition();
-			expect(store.spreadIndex).toBe(1);
-			expect(store.side).toBe('left');
 		});
 
 		it('prev() is the exact inverse of next()', () => {
@@ -130,125 +150,139 @@ describe('BookStore position model', () => {
 			store.prev();
 			expect(store.pending).toEqual({ spreadIndex: 0, side: 'right' });
 			store.completeTransition();
-			expect(store.spreadIndex).toBe(0);
-			expect(store.side).toBe('right');
-
 			store.prev();
 			expect(store.pending).toEqual({ spreadIndex: 0, side: 'left' });
-			store.completeTransition();
-			expect(store.side).toBe('left');
-		});
-
-		it('cannot step back past the first page', () => {
-			store.spreadIndex = 0;
-			store.side = 'left';
-			expect(store.canGoPrev).toBe(false);
-		});
-
-		it('cannot step past the last page', () => {
-			store.spreadIndex = 5;
-			store.side = 'right';
-			expect(store.canGoNext).toBe(false);
-			store.next();
-			expect(store.pending).toBeNull();
 		});
 	});
 
-	describe('goToPage', () => {
+	describe('covers', () => {
 		beforeEach(() => {
-			open(store);
+			store = makeStore(BOOK);
 		});
 
-		it('jumps to the spread containing the page (spread mode)', () => {
+		it('nothing lies before the cover', () => {
+			for (const mode of ['spread', 'single'] as const) {
+				store.mode = mode;
+				expect(position(store)).toEqual(COVER);
+
+				store.prev();
+				expect(store.pending).toBeNull();
+				expect(store.isFlipping).toBe(false);
+				expect(position(store)).toEqual(COVER);
+			}
+		});
+
+		it('going forward from the back cover returns to the front cover', () => {
+			for (const mode of ['spread', 'single'] as const) {
+				const store = makeStore(BOOK);
+				store.mode = mode;
+				store.spreadIndex = BACK_COVER.spreadIndex;
+				store.side = 'left';
+
+				store.next();
+				expect(store.pending).toEqual(COVER);
+				expect(store.flipDirection).toBe('prev');
+				store.completeTransition();
+				expect(position(store)).toEqual(COVER);
+			}
+		});
+
+		it('a turn inside the book still only turns the page', () => {
 			store.mode = 'spread';
-			store.goToPage(8); // page 9 -> spread 4
-			expect(store.pending).toEqual({ spreadIndex: 4, side: 'left' });
-			store.completeTransition();
-			expect(store.spreadIndex).toBe(4);
-		});
+			store.spreadIndex = 1;
 
-		it('lands on the requested side in single mode', () => {
-			store.mode = 'single';
-			store.spreadIndex = 0;
-			store.side = 'left';
-			store.goToPage(9); // page 10 -> spread 4, right side
-			expect(store.pending).toEqual({ spreadIndex: 4, side: 'right' });
-			store.completeTransition();
-			expect(store.side).toBe('right');
-		});
-
-		it('is a no-op when the target is already visible in spread mode', () => {
-			store.mode = 'spread';
-			store.spreadIndex = 2;
-			store.goToPage(4); // page 5, left of spread 2
-			expect(store.pending).toBeNull();
-			expect(store.isFlipping).toBe(false);
-		});
-
-		it('is ignored while a transition is in flight', () => {
-			store.mode = 'single';
-			store.spreadIndex = 0;
-			store.side = 'left';
 			store.next();
-			store.goToPage(10);
-			// The in-flight target is untouched.
-			expect(store.pending).toEqual({ spreadIndex: 0, side: 'right' });
+			expect(store.pending).toEqual({ spreadIndex: 2, side: 'left' });
+			store.completeTransition();
+
+			store.prev();
+			expect(store.pending).toEqual({ spreadIndex: 1, side: 'right' });
 		});
 
-		it('is ignored while the book is closed', () => {
-			store.mode = 'spread';
-			store.bookUIState = 'closed';
-			store.goToPage(4);
-			expect(store.pending).toBeNull();
+		it('a phone walks every face once and skips the empty sides', () => {
+			store.mode = 'single';
+			const faces = BOOK.filter((entry) => entry !== null);
+			const visited = [BOOK[store.pageIndexOfSide]];
+
+			for (let step = 1; step < faces.length; step++) {
+				store.next();
+				expect(store.flipDirection).toBe('next');
+				store.completeTransition();
+				visited.push(BOOK[store.pageIndexOfSide]);
+			}
+			expect(visited).toEqual(faces);
+			expect(position(store)).toEqual(BACK_COVER);
+
+			for (let step = 1; step < faces.length; step++) {
+				store.prev();
+				store.completeTransition();
+				visited.pop();
+				expect(BOOK[store.pageIndexOfSide]).toBe(visited.at(-1));
+			}
+			expect(position(store)).toEqual(COVER);
 		});
 
-		it('ignores out-of-bounds indexes', () => {
+		it('an odd page count never rests on a missing last side', () => {
+			const store = makeStore([null, side(1), side(2), side(3), side(4)]);
+			store.mode = 'single';
+			store.spreadIndex = 2;
+			store.side = 'left';
+
+			store.next();
+			expect(store.pending).toEqual(COVER);
+		});
+
+		it('goToCover turns straight back to the cover', () => {
 			store.mode = 'spread';
-			store.goToPage(12);
-			store.goToPage(-1);
+			store.goToCover();
 			expect(store.pending).toBeNull();
+
+			store.spreadIndex = 2;
+			store.goToCover();
+			expect(store.pending).toEqual(COVER);
+			expect(store.flipDirection).toBe('prev');
+
+			// Ignored mid-turn: the turn in flight keeps its target.
+			store.completeTransition();
+			store.next();
+			store.goToCover();
+			expect(store.pending).toEqual({ spreadIndex: 1, side: 'left' });
+		});
+
+		it('switching to a phone never lands on an empty side', () => {
+			store.mode = 'spread';
+			store.spreadIndex = BACK_COVER.spreadIndex;
+			store.side = 'right';
+
+			store.setMode('single');
+			expect(position(store)).toEqual(BACK_COVER);
 		});
 	});
 
-	describe('progress', () => {
-		it('tracks the page in single mode', () => {
-			store.mode = 'single';
-			store.spreadIndex = 0;
-			store.side = 'left';
-			expect(store.progressPercent).toBe(0);
-			store.spreadIndex = 5;
-			store.side = 'right';
-			expect(store.progressPercent).toBe(100);
-			store.spreadIndex = 2;
-			store.side = 'left';
-			expect(store.progressPercent).toBe(Math.round((4 / 11) * 100));
-		});
+	describe('sound', () => {
+		it('every page turn plays the paper sound', () => {
+			const store = makeStore(BOOK);
 
-		it('tracks the spread in spread mode', () => {
+			// Turning the cover is a page turn like any other.
 			store.mode = 'spread';
-			store.spreadIndex = 0;
-			expect(store.progressPercent).toBe(0);
-			store.spreadIndex = 5;
-			expect(store.progressPercent).toBe(100);
+			store.next();
+			expect(playPaperFlipSound).toHaveBeenLastCalledWith('next');
+			store.completeTransition();
+
+			store.mode = 'single';
+			store.next();
+			expect(playPaperFlipSound).toHaveBeenLastCalledWith('next');
+			store.completeTransition();
+
+			store.prev();
+			expect(playPaperFlipSound).toHaveBeenLastCalledWith('prev');
+			expect(playPaperFlipSound).toHaveBeenCalledTimes(3);
 		});
 	});
 
 	describe('view mode', () => {
-		it('switches in every state except mid-flip', () => {
+		it('switches whenever no turn is in flight', () => {
 			store.mode = 'spread';
-			expect(store.mode).toBe('spread');
-
-			// Allowed while closed (the framing is chosen before opening).
-			store.bookUIState = 'closed';
-			store.setMode('single');
-			expect(store.mode).toBe('single');
-
-			// Allowed while the cover opens/closes.
-			store.bookUIState = 'opening';
-			store.setMode('spread');
-			expect(store.mode).toBe('spread');
-
-			open(store);
 			store.setMode('single');
 			expect(store.mode).toBe('single');
 
@@ -257,103 +291,41 @@ describe('BookStore position model', () => {
 			store.setMode('spread');
 			expect(store.mode).toBe('single');
 			store.completeTransition();
-		});
-	});
 
-	describe('open/close lifecycle', () => {
-		it('opens and closes through the cover states', () => {
-			vi.useFakeTimers();
-			expect(store.bookUIState).toBe('closed');
-
-			store.openBook();
-			expect(store.bookUIState).toBe('opening');
-			expect(store.isBookOpen).toBe(false);
-
-			vi.advanceTimersByTime(850);
-			expect(store.bookUIState).toBe('opened');
-			expect(store.isBookOpen).toBe(true);
-
-			store.closeBook();
-			expect(store.bookUIState).toBe('closing');
-			vi.advanceTimersByTime(850);
-			expect(store.bookUIState).toBe('closed');
-		});
-
-		it('does not reopen while opening', () => {
-			store.openBook();
-			store.openBook();
-			expect(store.bookUIState).toBe('opening');
-		});
-
-		it('does not close a closed book', () => {
-			store.closeBook();
-			expect(store.bookUIState).toBe('closed');
-		});
-	});
-
-	describe('interactive answers', () => {
-		it('records answers by page id', () => {
-			store.selectOptionForPage('page-01', 'option-a');
-			expect(store.selectedOptions['page-01']).toBe('option-a');
-		});
-
-		it('ignores unknown page ids', () => {
-			store.selectOptionForPage('nope', 'option-a');
-			expect(store.selectedOptions['nope']).toBeUndefined();
+			store.setMode('spread');
+			expect(store.mode).toBe('spread');
 		});
 	});
 
 	describe('persistence', () => {
-		function installStorage(initial: Record<string, string> = {}) {
-			const backing = new Map(Object.entries(initial));
-			const localStorageStub = {
-				getItem: (key: string) => (backing.has(key) ? (backing.get(key) ?? null) : null),
-				setItem: (key: string, value: string) => {
-					backing.set(key, value);
-				},
-				removeItem: (key: string) => {
-					backing.delete(key);
-				}
-			};
-			Object.defineProperty(globalThis, 'localStorage', {
-				value: localStorageStub,
-				configurable: true
-			});
-			Object.defineProperty(globalThis, 'window', { value: {}, configurable: true });
-			return backing;
-		}
+		it('persists the position under the comic key', () => {
+			const backing = installStorage();
+			const store = makeStore();
+			store.spreadIndex = 1;
+			store.next();
+			store.completeTransition();
+			expect(backing.get('parque_position')).toBe(JSON.stringify({ spread: 2, side: 'left' }));
 
-		it('restores the saved position', () => {
-			installStorage({
-				[`${'plateia_position'}`]: JSON.stringify({ spread: 2, side: 'right' })
-			});
 			const restored = new BookStore();
 			expect(restored.spreadIndex).toBe(2);
-			expect(restored.side).toBe('right');
+			expect(restored.side).toBe('left');
 		});
 
-		it('migrates the legacy single-page position', () => {
-			installStorage({ plateia_page_index: '7' });
-			const migrated = new BookStore();
-			expect(migrated.spreadIndex).toBe(3);
-			expect(migrated.side).toBe('right');
-		});
-
-		it('ignores a malformed saved position', () => {
-			installStorage({ plateia_position: 'not json' });
+		it('ignores positions stored under other keys', () => {
+			installStorage({
+				plateia_position: JSON.stringify({ spread: 2, side: 'right' }),
+				plateia_page_index: '7'
+			});
 			const store = new BookStore();
 			expect(store.spreadIndex).toBe(0);
 			expect(store.side).toBe('left');
 		});
 
-		it('persists the position when a transition completes', () => {
-			const backing = installStorage();
-			const store = makeStore();
-			store.bookUIState = 'opened';
-			store.spreadIndex = 1;
-			store.next();
-			store.completeTransition();
-			expect(backing.get('plateia_position')).toBe(JSON.stringify({ spread: 2, side: 'left' }));
+		it('ignores a malformed saved position', () => {
+			installStorage({ parque_position: 'not json' });
+			const store = new BookStore();
+			expect(store.spreadIndex).toBe(0);
+			expect(store.side).toBe('left');
 		});
 	});
 });

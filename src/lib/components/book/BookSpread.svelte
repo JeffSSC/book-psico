@@ -1,35 +1,37 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import type { BookPage } from '../../types/book';
+	import type { BookFace } from '../../types/book';
 	import { bookStore } from '../../stores/bookStore.svelte';
-	import PageView from './PageView.svelte';
+	import FaceView from './FaceView.svelte';
 	import PageLeaf from './PageLeaf.svelte';
-	import { SPREAD_HEIGHT, SPREAD_WIDTH } from './pageScale';
+	import { PAGE_HEIGHT, PAGE_WIDTH, SPREAD_HEIGHT, SPREAD_WIDTH } from './pageScale';
 	import { prefersReducedMotion } from './reducedMotion';
 
 	/**
-	 * The open book, top down: a two-page spread.
+	 * The book as two sides. A side may be empty: the closed book is the
+	 * cover alone on the right, the finished book the back cover alone on
+	 * the left.
 	 *
 	 * The store commits a spread change only when the leaf lands, so
 	 * during a turn `spreadIndex` is the spread being left and
 	 * `pending` is the one being opened. The leaf bridges the leaving
-	 * spread's right page to the incoming spread's left page; beneath
-	 * it we always show the leaving left page (read side) and the
-	 * incoming right page (unread side).
+	 * spread's right side to the incoming spread's left side; beneath
+	 * it we always show the leaving left side (read) and the incoming
+	 * right side (unread).
 	 */
 
 	let {
-		pages,
+		sides,
 		scale,
-		splay = false,
+		sizes,
 		onFlipEnd
 	}: {
-		pages: BookPage[];
+		/** The sides of the book in order; `null` is an empty side. */
+		sides: (BookFace | null)[];
 		/** Uniform scale computed by the scene (fitScale helpers). */
 		scale: number;
-		/** True while the book is opening: page 01 splays left
-		 *  about the gutter onto the face-down cover. */
-		splay?: boolean;
+		/** `sizes` of one page image, shared with the scene's preloads. */
+		sizes: string;
 		/** Commit the pending position when the leaf lands. */
 		onFlipEnd: () => void;
 	} = $props();
@@ -47,29 +49,26 @@
 	const from = $derived(current);
 	const to = $derived(isFlipping ? (pending?.spreadIndex ?? current) : current);
 
-	const leftPageIdx = $derived(
+	const leftIdx = $derived(
 		isFlipping && !reduced ? (direction === 'next' ? from * 2 : to * 2) : to * 2
 	);
 	/**
-	 * A forward turn lifts the leaf off the right page, exposing
+	 * A forward turn lifts the leaf off the right side, exposing
 	 * the incoming one underneath — so the target shows at once.
 	 * A backward turn is the opposite: the leaf swings across the
-	 * right page and lands on it, so that page must keep the one
+	 * right side and lands on it, so that side must keep the one
 	 * we are leaving until the leaf has covered it.
 	 */
-	const rightPageIdx = $derived(
+	const rightIdx = $derived(
 		isFlipping && !reduced && direction === 'prev' ? from * 2 + 1 : to * 2 + 1
 	);
 
-	const leafFrontIdx = $derived(direction === 'next' ? from * 2 + 1 : from * 2);
-	const leafBackIdx = $derived(direction === 'next' ? to * 2 : to * 2 + 1);
+	const left = $derived(sides[leftIdx] ?? null);
+	const right = $derived(sides[rightIdx] ?? null);
+	const leafFront = $derived(sides[direction === 'next' ? from * 2 + 1 : from * 2] ?? null);
+	const leafBack = $derived(sides[direction === 'next' ? to * 2 : to * 2 + 1] ?? null);
 
-	const leftHasStack = $derived(from > 0);
-	const rightHasStack = $derived(to < Math.ceil(pages.length / 2) - 1);
-
-	const page = (i: number): BookPage => pages[i] ?? pages[0];
-
-	// Reduced motion swaps the leaf for an instant swap of pages, so
+	// Reduced motion swaps the leaf for an instant swap of sides, so
 	// the position commits on the next frame instead of the animation end.
 	$effect(() => {
 		if (isFlipping && reduced) {
@@ -83,49 +82,50 @@
 	class="spread-frame"
 	style:width={`${SPREAD_WIDTH * scale}px`}
 	style:height={`${SPREAD_HEIGHT * scale}px`}
+	style:--page-w={`${PAGE_WIDTH}px`}
+	style:--page-h={`${PAGE_HEIGHT}px`}
 >
 	<div
 		class="spread"
+		class:spread--open={left && right}
 		class:flip-next={isFlipping && direction === 'next'}
 		class:flip-prev={isFlipping && direction === 'prev'}
 		style:transform={`scale(${scale})`}
 	>
-		<!-- Read side: during the opening, page 01 splays left about the
-		     gutter and lands on the face-down cover (see §5). -->
-		<div class="half half--left" class:splaying={splay}>
-			<div class="splay-face">
-				{#if leftHasStack}
-					<div class="stack stack--left" aria-hidden="true"></div>
-				{/if}
-				<PageView page={page(leftPageIdx)} side="left" showNumber={leftPageIdx !== 0} />
-			</div>
+		<!-- Read side -->
+		<div class="half half--left" class:half--filled={left}>
+			{#if left}
+				<FaceView face={left} side="left" {sizes} />
+			{/if}
 			<div class="landing landing--left" aria-hidden="true"></div>
 		</div>
 
-		<div class="gutter" aria-hidden="true"></div>
+		{#if left && right}
+			<div class="gutter" aria-hidden="true"></div>
+		{/if}
 
 		<!-- Unread side -->
-		<div class="half half--right">
-			{#if rightHasStack}
-				<div class="stack stack--right" aria-hidden="true"></div>
+		<div class="half half--right" class:half--filled={right}>
+			{#if right}
+				<FaceView face={right} side="right" {sizes} />
 			{/if}
-			<PageView page={page(rightPageIdx)} side="right" showNumber={true} />
 			<div class="landing landing--right" aria-hidden="true"></div>
 		</div>
 
 		<!-- The turning leaf (mounted for the duration of the turn) -->
-		{#if isFlipping && !reduced}
+		{#if isFlipping && !reduced && leafFront}
 			<div
-				class="half"
+				class="half half--leaf"
 				class:half--left={direction === 'prev'}
 				class:half--right={direction === 'next'}
 			>
 				<PageLeaf
-					frontPage={page(leafFrontIdx)}
-					backPage={page(leafBackIdx)}
+					frontPage={leafFront}
+					backPage={leafBack}
 					frontSide={direction === 'next' ? 'right' : 'left'}
 					backSide={direction === 'next' ? 'left' : 'right'}
 					{direction}
+					{sizes}
 					onEnd={onFlipEnd}
 				/>
 			</div>
@@ -141,8 +141,8 @@
 
 	.spread {
 		position: relative;
-		width: 1032px;
-		height: 720px;
+		width: calc(var(--page-w) * 2);
+		height: var(--page-h);
 		perspective: 1700px;
 		/* Fitted to the frame by the scene's scale. */
 		transform-origin: top left;
@@ -151,8 +151,8 @@
 	.half {
 		position: absolute;
 		top: 0;
-		width: 512px;
-		height: 720px;
+		width: var(--page-w);
+		height: var(--page-h);
 		/* Keep the leaf's 3D in the spread's perspective
 		   context — a flat wrapper would squash the
 		   swing into a flat horizontal shrink. */
@@ -161,60 +161,38 @@
 	.half--left {
 		left: 0;
 	}
+	/* Each side that holds a face casts the book's shadow; the leaf does not. */
+	.half--filled:not(.half--leaf) {
+		box-shadow:
+			0 2px 4px rgba(74, 48, 16, 0.3),
+			0 18px 40px rgba(74, 48, 16, 0.35);
+	}
+	/* With both sides filled, neither shadow may fall across the spine. */
+	.spread--open .half--left.half--filled:not(.half--leaf) {
+		clip-path: inset(-80px 0 -80px -80px);
+	}
+	.spread--open .half--right.half--filled:not(.half--leaf) {
+		clip-path: inset(-80px -80px -80px 0);
+	}
 	.half--right {
 		right: 0;
-	}
-
-	/* The read/unread piles under the top pages. */
-	.stack {
-		position: absolute;
-		inset: 2px 3px -3px 2px;
-		border-radius: 2px;
-		background: repeating-linear-gradient(to bottom, #f4efe3 0 2px, #ddd5c4 2px 3px), #f4efe3;
-		box-shadow: 0 1px 2px rgba(64, 52, 34, 0.35);
-	}
-	.stack--right {
-		inset: 2px 2px -3px 3px;
 	}
 
 	.gutter {
 		position: absolute;
 		top: 0;
 		left: 50%;
-		width: 44px;
-		height: 720px;
+		width: 10px;
+		height: var(--page-h);
 		transform: translateX(-50%);
 		pointer-events: none;
 		z-index: 15;
-		opacity: 0.4;
-		background: linear-gradient(to right, transparent, rgba(50, 40, 24, 0.5) 50%, transparent);
+		opacity: 0.6;
+		/* The crease itself: a thin dark line where the two pages meet. */
+		background: linear-gradient(to right, transparent, rgba(16, 9, 2, 0.75) 50%, transparent);
 	}
 
 	/* Landing shadow on the side receiving the leaf. */
-	/* Flat wrapper (no preserve-3d) so backface-visibility can hide
-	   the mirrored page while it is face-down mid-splay. */
-	.splay-face {
-		position: absolute;
-		inset: 0;
-		backface-visibility: hidden;
-	}
-
-	@media (prefers-reduced-motion: no-preference) {
-		.half--left.splaying .splay-face {
-			transform-origin: right center;
-			animation: splay-in 320ms cubic-bezier(0.4, 0, 0.2, 1) 330ms both;
-		}
-	}
-
-	@keyframes splay-in {
-		from {
-			transform: rotateY(180deg);
-		}
-		to {
-			transform: rotateY(0deg);
-		}
-	}
-
 	.landing {
 		position: absolute;
 		inset: 0;
@@ -223,10 +201,10 @@
 		opacity: 0;
 	}
 	.landing--left {
-		background: linear-gradient(to left, rgba(30, 24, 12, 0.5), transparent 58%);
+		background: linear-gradient(to left, rgba(4, 6, 16, 0.55), transparent 58%);
 	}
 	.landing--right {
-		background: linear-gradient(to right, rgba(30, 24, 12, 0.5), transparent 58%);
+		background: linear-gradient(to right, rgba(4, 6, 16, 0.55), transparent 58%);
 	}
 
 	.spread.flip-next .landing--left,
@@ -251,13 +229,13 @@
 	}
 	@keyframes gutter-swell {
 		0% {
-			opacity: 0.4;
+			opacity: 0.6;
 		}
 		50% {
-			opacity: 0.85;
+			opacity: 1;
 		}
 		100% {
-			opacity: 0.45;
+			opacity: 0.6;
 		}
 	}
 

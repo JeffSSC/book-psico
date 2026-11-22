@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { BookScene, bookMeta, bookPages } from '#lib';
+	import { BookScene, bookMeta, comic } from '#lib';
 </script>
 
 <svelte:head>
@@ -7,7 +7,6 @@
 	<meta name="description" content={bookMeta.seo.description} />
 </svelte:head>
 
-<main class="relative h-[100dvh] h-screen w-full overflow-hidden bg-[#FAF8F5]">
-	<!-- 2D TOP-DOWN BOOK EXPERIENCE -->
-	<BookScene pages={bookPages} />
+<main>
+	<BookScene {comic} />
 </main>

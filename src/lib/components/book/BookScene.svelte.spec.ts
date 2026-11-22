@@ -1,163 +1,417 @@
-import { page } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import BookScene from './BookScene.svelte';
-import { bookPages } from '../../data/bookPages';
+// The scene's layering relies on the app stylesheet, as in the real page.
+import '../../../routes/layout.css';
+import { comic } from '../../data/comic';
 import { bookStore } from '../../stores/bookStore.svelte';
 
 /**
- * End-to-end DOM smoke test of the 2D book: cover → open →
- * spread turn → single-mode slide. The store is a singleton, so
- * every test resets it and waits for the mount-time registration
- * before driving it directly.
+ * End-to-end DOM test of the bare HQ reader: a book whose cover, pages and
+ * back cover turn when clicked. The store is a singleton, so every test
+ * resets it and waits for the mount-time registration before driving it.
  */
 
-const OPEN_LABEL = 'Clique para abrir o livro';
+const OPEN_LABEL = 'Abrir a HQ';
+/** Sides of the book: an empty one, the cover, 14 pages, the back cover, an empty one. */
+const SIDES = 18;
+const FIRST_SPREAD = 1;
+const LAST_SPREAD = 7;
+const BACK_COVER_SPREAD = 8;
 
-function resetStore() {
-	bookStore.spreadIndex = 0;
-	bookStore.side = 'left';
-	bookStore.mode = 'spread';
-	bookStore.bookUIState = 'closed';
+const nextFrames = () =>
+	new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+/** Mounts the reader resting at a position; the cover by default. */
+async function mountAt(
+	mode: 'spread' | 'single',
+	spreadIndex = 0,
+	side: 'left' | 'right' = spreadIndex === 0 ? 'right' : 'left'
+) {
 	bookStore.isFlipping = false;
 	bookStore.pending = null;
+	render(BookScene, { comic });
+	// Wait for mount-time registration before touching the store.
+	await vi.waitFor(() => {
+		expect(bookStore.totalPages).toBe(SIDES);
+	});
+	// Let the mount-time measurement run — it would otherwise override
+	// the mode under test — then force the mode and the position.
+	await nextFrames();
+	bookStore.mode = mode;
+	bookStore.spreadIndex = spreadIndex;
+	bookStore.side = side;
+	await nextFrames();
 }
 
-async function mountOpened(mode: 'spread' | 'single') {
-	resetStore();
-	render(BookScene, { pages: bookPages });
-	// Wait for mount-time page registration before touching the store.
-	await vi.waitFor(() => {
-		expect(bookStore.totalPages).toBe(12);
+async function settled(expected: { spreadIndex: number; side?: 'left' | 'right' }) {
+	await vi.waitFor(
+		() => {
+			expect(bookStore.isFlipping).toBe(false);
+			expect(bookStore.spreadIndex).toBe(expected.spreadIndex);
+			if (expected.side) expect(bookStore.side).toBe(expected.side);
+		},
+		{ timeout: 2000 }
+	);
+}
+
+/** Alt text of the art resting on screen, left to right. */
+const shownPages = () =>
+	[...document.querySelectorAll<HTMLImageElement>('.book img')].map((img) => img.alt);
+/** The two story pages of a spread, as `shownPages` reports them. */
+const spreadPages = (spreadIndex: number) => [
+	comic.pages[spreadIndex * 2 - 2].alt,
+	comic.pages[spreadIndex * 2 - 1].alt
+];
+
+const coverArea = () => page.getByRole('button', { name: OPEN_LABEL });
+const previousArea = () => page.getByRole('button', { name: 'Página anterior' });
+const nextArea = () => page.getByRole('button', { name: 'Próxima página' });
+const backCover = () => page.getByRole('img', { name: 'Contracapa' });
+const stage = () => document.querySelector<HTMLElement>('.scene')!;
+const buttonNames = () =>
+	[...document.querySelectorAll('button')]
+		.map((button) => button.getAttribute('aria-label'))
+		.sort();
+
+/** Horizontal distance, in px, between an element's centre and the stage's. */
+function offCentre(element: Element): number {
+	const rect = element.getBoundingClientRect();
+	const whole = stage().getBoundingClientRect();
+	return Math.abs(rect.left + rect.width / 2 - (whole.left + whole.width / 2));
+}
+
+/** Relative luminance (0 black – 1 white) of a CSS `rgb()` colour. */
+function luminance(color: string): number {
+	const [r, g, b] = color.match(/[\d.]+/g)!.map((channel) => {
+		const c = Number(channel) / 255;
+		return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
 	});
-	bookStore.bookUIState = 'opened';
-	// Let the mount-time ResizeObserver measurement run — it would
-	// otherwise override the mode under test — then force the mode.
-	await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-	bookStore.mode = mode;
-	await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+	return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function pointer(type: string, point: { x: number; y: number }, pointerId = 1) {
+	stage().dispatchEvent(
+		new PointerEvent(type, {
+			bubbles: true,
+			pointerId,
+			pointerType: 'touch',
+			isPrimary: pointerId === 1,
+			clientX: point.x,
+			clientY: point.y
+		})
+	);
+}
+
+/** Drags one pointer across the stage, as a finger would. */
+function drag(from: { x: number; y: number }, to: { x: number; y: number }) {
+	pointer('pointerdown', from);
+	pointer('pointermove', to);
+	pointer('pointerup', to);
 }
 
 describe('BookScene.svelte', () => {
-	it('opens the book from the closed cover', async () => {
-		resetStore();
-		render(BookScene, { pages: bookPages });
+	it('the closed book shows only its cover', async () => {
+		await mountAt('spread');
+
+		expect(shownPages()).toEqual([comic.cover.alt]);
+		expect(buttonNames()).toEqual([OPEN_LABEL]);
+		expect(document.querySelector('h1, h2, h3')).toBeNull();
+		expect(stage().textContent!.trim()).toBe('');
+
+		const art = document.querySelector<HTMLImageElement>('.book img')!;
+		expect(art.getAttribute('loading')).toBe('eager');
+		expect(art.getAttribute('fetchpriority')).toBe('high');
 		await vi.waitFor(() => {
-			expect(bookStore.totalPages).toBe(12);
+			expect(offCentre(art)).toBeLessThanOrEqual(2);
+		});
+	});
+
+	it('the cover opens like a page', async () => {
+		await mountAt('spread');
+
+		await coverArea().click();
+		// The cover itself is the leaf that turns.
+		const leafFront = document.querySelector<HTMLImageElement>('.leaf .face--front img');
+		expect(leafFront?.alt).toBe(comic.cover.alt);
+
+		await settled({ spreadIndex: FIRST_SPREAD });
+		expect(shownPages()).toEqual(spreadPages(FIRST_SPREAD));
+		await vi.waitFor(() => {
+			expect(offCentre(document.querySelector('.spread-frame')!)).toBeLessThanOrEqual(2);
+		});
+	});
+
+	it('the open book shows only its pages', async () => {
+		await mountAt('spread', FIRST_SPREAD);
+
+		expect(buttonNames()).toEqual(['Página anterior', 'Próxima página'].sort());
+		expect(document.querySelector('h1, h2, h3, header, footer, dialog')).toBeNull();
+		expect(document.querySelector('[role="progressbar"]')).toBeNull();
+		// No title, Sumário, counter or hint: the art is the only content.
+		expect(stage().textContent!.trim()).toBe('');
+		expect(shownPages()).toEqual(spreadPages(FIRST_SPREAD));
+	});
+
+	it('clicking the right page goes forward and the left page goes back', async () => {
+		await mountAt('spread', FIRST_SPREAD);
+
+		// Each click area is exactly one page of the spread.
+		const left = document.querySelector('.half--left')!.getBoundingClientRect();
+		const right = document.querySelector('.half--right')!.getBoundingClientRect();
+		const back = previousArea().element().getBoundingClientRect();
+		const forward = nextArea().element().getBoundingClientRect();
+		for (const [area, half] of [
+			[back, left],
+			[forward, right]
+		] as const) {
+			expect(area.left).toBeCloseTo(half.left, 0);
+			expect(area.right).toBeCloseTo(half.right, 0);
+			expect(area.top).toBeCloseTo(half.top, 0);
+			expect(area.bottom).toBeCloseTo(half.bottom, 0);
+		}
+
+		await nextArea().click();
+		await settled({ spreadIndex: 2 });
+		expect(shownPages()).toEqual(spreadPages(2));
+
+		await previousArea().click();
+		await settled({ spreadIndex: FIRST_SPREAD });
+		expect(shownPages()).toEqual(spreadPages(FIRST_SPREAD));
+	});
+
+	it('going back from the first spread closes the book on its cover', async () => {
+		await mountAt('spread', FIRST_SPREAD);
+
+		await previousArea().click();
+		expect(document.querySelector('.leaf')).not.toBeNull();
+		await settled({ spreadIndex: 0 });
+
+		expect(shownPages()).toEqual([comic.cover.alt]);
+		await vi.waitFor(() => {
+			expect(offCentre(document.querySelector('.book img')!)).toBeLessThanOrEqual(2);
+		});
+	});
+
+	it('after the last spread comes the back cover', async () => {
+		await mountAt('spread', LAST_SPREAD);
+		expect(shownPages()).toEqual(spreadPages(LAST_SPREAD));
+
+		await nextArea().click();
+		await settled({ spreadIndex: BACK_COVER_SPREAD });
+		expect(shownPages()).toEqual([]);
+		await expect.element(backCover()).toBeVisible();
+		await vi.waitFor(() => {
+			expect(offCentre(backCover().element())).toBeLessThanOrEqual(2);
 		});
 
-		const cover = page.getByRole('button', { name: OPEN_LABEL });
-		await expect.element(cover).toBeInTheDocument();
+		// The back cover is the left page: clicking it goes back.
+		expect(buttonNames()).toEqual(['Página anterior']);
+		await previousArea().click();
+		await settled({ spreadIndex: LAST_SPREAD });
 
-		await cover.click();
-		await vi.waitFor(
-			() => {
-				expect(bookStore.bookUIState).toBe('opened');
-			},
-			{ timeout: 2000 }
-		);
-
-		// First spread, left page (01): the title page. Visible in
-		// both view modes since the book opens on the left page.
-		await expect
-			.element(
-				page.getByText('Um ensaio psicológico sobre mente, egocentrismo e liberdade interior')
-			)
-			.toBeInTheDocument();
+		await nextArea().click();
+		await settled({ spreadIndex: BACK_COVER_SPREAD });
+		await userEvent.keyboard('{ArrowRight}');
+		await settled({ spreadIndex: 0 });
+		expect(shownPages()).toEqual([comic.cover.alt]);
 	});
 
-	it('turns a spread forward and back with the leaf animation', async () => {
-		await mountOpened('spread');
+	it("the back cover is drawn in the cover's colours", async () => {
+		await mountAt('spread', BACK_COVER_SPREAD);
 
-		// Spread 1: P1 + P2.
-		await expect.element(page.getByText('O Palco Invisível', { exact: true })).toBeInTheDocument();
+		const board = backCover().element();
+		expect(luminance(getComputedStyle(board).backgroundColor)).toBeLessThanOrEqual(0.1);
+		expect(board.textContent!.trim()).toBe('');
 
-		// Forward turn: the leaf carries P2 onto P1 and reveals P3 + P4.
-		bookStore.next();
-		await vi.waitFor(
-			() => {
-				expect(bookStore.isFlipping).toBe(false);
-				expect(bookStore.spreadIndex).toBe(1);
-			},
-			{ timeout: 2000 }
-		);
-		await expect.element(page.getByText('Índice Geral')).toBeInTheDocument();
-		await expect.element(page.getByText('A Travessia das Mutações')).toBeInTheDocument();
-
-		// Backward turn: the leaf carries P3 back onto P2. It swings
-		// ACROSS the right page, so that page keeps showing the spread
-		// we are leaving until the leaf has covered it.
-		bookStore.prev();
-		await expect.element(page.getByText('A Travessia das Mutações')).toBeInTheDocument();
-		await vi.waitFor(
-			() => {
-				expect(bookStore.isFlipping).toBe(false);
-				expect(bookStore.spreadIndex).toBe(0);
-			},
-			{ timeout: 2000 }
-		);
-		await expect.element(page.getByText('O Palco Invisível', { exact: true })).toBeInTheDocument();
+		const half = document.querySelector('.half--left')!.getBoundingClientRect();
+		const rect = board.getBoundingClientRect();
+		expect(rect.width).toBeCloseTo(half.width, 0);
+		expect(rect.height).toBeCloseTo(half.height, 0);
 	});
 
-	it('slides for every step, never leafing', async () => {
-		await mountOpened('single');
+	it('arrow keys turn the page and Escape returns to the cover', async () => {
+		await mountAt('spread');
 
-		// Single mode starts on P1 (left page of spread 1); its
-		// footer note is unique to the title page.
-		await expect
-			.element(
-				page.getByText('Um ensaio psicológico sobre mente, egocentrismo e liberdade interior')
-			)
-			.toBeInTheDocument();
+		await userEvent.keyboard('{ArrowRight}');
+		await settled({ spreadIndex: FIRST_SPREAD });
+		await userEvent.keyboard('{ArrowRight}');
+		await settled({ spreadIndex: 2 });
+		await userEvent.keyboard('{ArrowLeft}');
+		await settled({ spreadIndex: FIRST_SPREAD });
 
-		// Next slides to P2 (right page of the same spread) — a slide,
-		// with no leaf in the DOM at any point.
+		await userEvent.keyboard('{ArrowRight}');
+		await settled({ spreadIndex: 2 });
+		await userEvent.keyboard('{Escape}');
+		await settled({ spreadIndex: 0 });
+		expect(shownPages()).toEqual([comic.cover.alt]);
+	});
+
+	it('keyboard focus stays on the forward area', async () => {
+		await mountAt('spread');
+
+		// Forward is the first stop, so Enter never turns a fresh reader back.
+		await userEvent.keyboard('{Tab}');
+		const forward = document.activeElement!;
+		expect(forward.getAttribute('aria-label')).toBe(OPEN_LABEL);
+
+		await userEvent.keyboard('{Enter}');
+		await settled({ spreadIndex: FIRST_SPREAD });
+		expect(document.activeElement).toBe(forward);
+		expect(forward.getAttribute('aria-label')).toBe('Próxima página');
+
+		await userEvent.keyboard('{Enter}');
+		await settled({ spreadIndex: 2 });
+		expect(document.activeElement).toBe(forward);
+	});
+
+	it('only mounts the pages on screen', async () => {
+		await mountAt('spread', FIRST_SPREAD);
+		expect(document.querySelectorAll('.book img').length).toBe(2);
+
+		// Mid-turn the leaf adds its two faces, never the whole HQ.
 		bookStore.next();
-		expect(document.querySelector('.slide-track')).not.toBeNull();
-		expect(document.querySelectorAll('.leaf').length).toBe(0);
-		await vi.waitFor(
-			() => {
-				expect(bookStore.isFlipping).toBe(false);
-				expect(bookStore.side).toBe('right');
-			},
-			{ timeout: 2000 }
-		);
-		await expect.element(page.getByText('O Palco Invisível', { exact: true })).toBeInTheDocument();
+		await nextFrames();
+		expect(document.querySelectorAll('.book img').length).toBeLessThanOrEqual(4);
+		await settled({ spreadIndex: 2 });
+		expect(document.querySelectorAll('.book img').length).toBe(2);
+	});
 
-		// Next again slides across the spread boundary to P3.
-		bookStore.next();
-		await vi.waitFor(
-			() => {
-				expect(bookStore.isFlipping).toBe(false);
-				expect(bookStore.spreadIndex).toBe(1);
-				expect(bookStore.side).toBe('left');
-			},
-			{ timeout: 2000 }
-		);
-		await expect.element(page.getByText('Índice Geral')).toBeInTheDocument();
+	it('on a phone the right half goes forward and the left half goes back', async () => {
+		await mountAt('single', FIRST_SPREAD);
+		expect(shownPages()).toEqual([comic.pages[0].alt]);
 
-		// Back is the exact inverse: slide to P2, then to P1.
-		bookStore.prev();
-		await vi.waitFor(
-			() => {
-				expect(bookStore.isFlipping).toBe(false);
-				expect(bookStore.spreadIndex).toBe(0);
-				expect(bookStore.side).toBe('right');
-			},
-			{ timeout: 2000 }
-		);
-		bookStore.prev();
-		await vi.waitFor(
-			() => {
-				expect(bookStore.isFlipping).toBe(false);
-				expect(bookStore.side).toBe('left');
-			},
-			{ timeout: 2000 }
-		);
-		await expect
-			.element(
-				page.getByText('Um ensaio psicológico sobre mente, egocentrismo e liberdade interior')
-			)
-			.toBeInTheDocument();
+		const frame = document.querySelector('.single-frame')!.getBoundingClientRect();
+		const back = previousArea().element().getBoundingClientRect();
+		const forward = nextArea().element().getBoundingClientRect();
+		expect(back.left).toBeCloseTo(frame.left, 0);
+		expect(back.right).toBeCloseTo(frame.left + frame.width / 2, 0);
+		expect(forward.left).toBeCloseTo(frame.left + frame.width / 2, 0);
+		expect(forward.right).toBeCloseTo(frame.right, 0);
+
+		// Every step is a flip of the sheet, never a slide.
+		await nextArea().click();
+		expect(document.querySelector('.leaf')).not.toBeNull();
+		expect(document.querySelector('.slide-track')).toBeNull();
+		await settled({ spreadIndex: FIRST_SPREAD, side: 'right' });
+		expect(shownPages()).toEqual([comic.pages[1].alt]);
+
+		await nextArea().click();
+		expect(document.querySelector('.leaf')).not.toBeNull();
+		await settled({ spreadIndex: 2, side: 'left' });
+		expect(shownPages()).toEqual([comic.pages[2].alt]);
+
+		await previousArea().click();
+		expect(document.querySelector('.leaf')).not.toBeNull();
+		expect(document.querySelector('.slide-track')).toBeNull();
+		await settled({ spreadIndex: FIRST_SPREAD, side: 'right' });
+		expect(shownPages()).toEqual([comic.pages[1].alt]);
+	});
+
+	it('on a phone the cover and every page flip', async () => {
+		await mountAt('single');
+		expect(shownPages()).toEqual([comic.cover.alt]);
+		expect(buttonNames()).toEqual([OPEN_LABEL]);
+
+		await coverArea().click();
+		const leafFront = document.querySelector<HTMLImageElement>('.leaf .face--front img');
+		expect(leafFront?.alt).toBe(comic.cover.alt);
+		expect(document.querySelector('.slide-track')).toBeNull();
+
+		await settled({ spreadIndex: FIRST_SPREAD, side: 'left' });
+		expect(shownPages()).toEqual([comic.pages[0].alt]);
+		expect(document.querySelector('.leaf')).toBeNull();
+	});
+
+	it('clicking outside the pages does nothing', async () => {
+		await mountAt('single', FIRST_SPREAD);
+		const area = stage().getBoundingClientRect();
+
+		await userEvent.click(stage(), { position: { x: 4, y: area.height / 2 } });
+		await userEvent.click(stage(), { position: { x: area.width - 4, y: area.height / 2 } });
+		await nextFrames();
+
+		expect(bookStore.isFlipping).toBe(false);
+		expect(bookStore.pageIndexOfSide).toBe(2);
+	});
+
+	it('a horizontal swipe turns the page on a phone', async () => {
+		await mountAt('single', FIRST_SPREAD);
+
+		drag({ x: 400, y: 400 }, { x: 340, y: 406 });
+		await settled({ spreadIndex: FIRST_SPREAD, side: 'right' });
+
+		drag({ x: 340, y: 400 }, { x: 400, y: 396 });
+		await settled({ spreadIndex: FIRST_SPREAD, side: 'left' });
+
+		// The click a browser sends after a drag must not turn a second page,
+		// even when the first turn has already landed.
+		drag({ x: 700, y: 400 }, { x: 640, y: 400 });
+		bookStore.completeTransition();
+		nextArea()
+			.element()
+			.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+		expect(bookStore.isFlipping).toBe(false);
+		expect(bookStore.pageIndexOfSide).toBe(3);
+		await nextFrames();
+
+		// A vertical drag is a scroll gesture, not a page turn.
+		drag({ x: 400, y: 300 }, { x: 410, y: 420 });
+		await nextFrames();
+		expect(bookStore.isFlipping).toBe(false);
+		expect(bookStore.pageIndexOfSide).toBe(3);
+	});
+
+	it('a two-finger gesture never turns the page', async () => {
+		await mountAt('single', FIRST_SPREAD);
+
+		// Whichever finger travels sideways, a pinch is not a swipe.
+		for (const moving of [1, 2]) {
+			const still = moving === 1 ? 2 : 1;
+			pointer('pointerdown', { x: 400, y: 400 }, 1);
+			pointer('pointerdown', { x: 500, y: 420 }, 2);
+			pointer('pointermove', { x: 300, y: 400 }, moving);
+			pointer('pointerup', { x: 300, y: 400 }, moving);
+			pointer('pointerup', { x: 450, y: 410 }, still);
+			await nextFrames();
+
+			expect(bookStore.isFlipping).toBe(false);
+			expect(bookStore.pageIndexOfSide).toBe(2);
+		}
+
+		// One finger alone still swipes afterwards.
+		drag({ x: 400, y: 400 }, { x: 320, y: 400 });
+		await settled({ spreadIndex: FIRST_SPREAD, side: 'right' });
+	});
+
+	it('nothing enlarges a page', async () => {
+		await mountAt('spread', FIRST_SPREAD);
+
+		await nextArea().dblClick();
+		await vi.waitFor(() => {
+			expect(bookStore.isFlipping).toBe(false);
+		});
+		await previousArea().click();
+		await vi.waitFor(() => {
+			expect(bookStore.isFlipping).toBe(false);
+		});
+
+		expect(document.querySelector('dialog, [role="dialog"]')).toBeNull();
+		expect(buttonNames().filter((name) => /ampliar/i.test(name ?? ''))).toEqual([]);
+	});
+
+	it('the pages use the whole screen', async () => {
+		await mountAt('spread', FIRST_SPREAD);
+
+		const spread = document.querySelector('.spread-frame')!.getBoundingClientRect();
+		expect(spread.height / stage().getBoundingClientRect().height).toBeGreaterThanOrEqual(0.92);
+	});
+
+	it('the stage is bright', async () => {
+		await mountAt('spread', FIRST_SPREAD);
+
+		expect(luminance(getComputedStyle(stage()).backgroundColor)).toBeGreaterThanOrEqual(0.7);
+		expect(document.querySelector('.fireflies')).toBeNull();
 	});
 });

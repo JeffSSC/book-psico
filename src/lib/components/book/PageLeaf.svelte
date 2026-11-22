@@ -1,18 +1,17 @@
 <script lang="ts">
-	import type { BookPage, FlipDirection, PageSide } from '../../types/book';
-	import PageView from './PageView.svelte';
+	import type { BookFace, FlipDirection, PageSide } from '../../types/book';
+	import FaceView from './FaceView.svelte';
 
 	/**
-	 * The turning leaf. It fills its positioning parent (a spread half, or the
-	 * whole page in single mode) and hinges on the spine:
+	 * The turning leaf. It fills its positioning parent (a spread half, or
+	 * the single page of a phone) and hinges on the spine:
 	 *
 	 * - "next" leaves hinge on their LEFT edge and rotate 0 -> -180deg,
 	 * - "prev" leaves hinge on their RIGHT edge and rotate 0 -> +180deg,
 	 *
 	 * so the free edge always lifts toward the viewer (out of the table) and
-	 * the leaf sweeps to the other side of the spine. Face shading is baked
-	 * per direction: the departing face deepens as it turns away, the
-	 * arriving face lands in the light.
+	 * the leaf sweeps to the other side of the spine. `reverse` plays a turn
+	 * backwards: the sheet comes back from the far side and lands.
 	 */
 
 	let {
@@ -21,15 +20,21 @@
 		frontSide = 'right',
 		backSide = 'left',
 		direction,
+		reverse = false,
+		sizes,
 		onEnd
 	}: {
 		/** The face currently on top (the page being turned away from). */
-		frontPage: BookPage;
-		/** The face revealed underneath / that lands after the turn. */
-		backPage: BookPage;
+		frontPage: BookFace;
+		/** The reverse of the sheet; `null` is blank paper. */
+		backPage: BookFace | null;
 		frontSide?: PageSide;
 		backSide?: PageSide;
 		direction: FlipDirection;
+		/** Play the turn backwards, ending with the front face lying flat. */
+		reverse?: boolean;
+		/** On-screen width of a page, for the browser's source choice. */
+		sizes: string;
 		/** Fires when the turn animation finishes (commit the position). */
 		onEnd: () => void;
 	} = $props();
@@ -45,13 +50,16 @@
 	class="leaf"
 	class:leaf-next={direction === 'next'}
 	class:leaf-prev={direction === 'prev'}
+	class:leaf-reverse={reverse}
 	onanimationend={handleAnimationEnd}
 >
 	<div class="face face--front">
-		<PageView page={frontPage} side={frontSide} showNumber={frontPage.pageNumber !== 1} />
+		<FaceView face={frontPage} side={frontSide} {sizes} />
 	</div>
 	<div class="face face--back">
-		<PageView page={backPage} side={backSide} showNumber={backPage.pageNumber !== 1} />
+		{#if backPage}
+			<FaceView face={backPage} side={backSide} {sizes} />
+		{/if}
 	</div>
 </div>
 
@@ -97,7 +105,9 @@
 	}
 
 	/**
-	 * The two faces are swapped by visibility, not by `backface-visibility`.
+	 * The two faces are swapped by opacity, not by `backface-visibility`.
+	 * (Opacity, not visibility, so the hidden face is already painted when
+	 * its turn comes and never shows blank for a frame.)
 	 * Chromium decides an element's facing from its own transform only, so
 	 * the face carrying the 180° pre-rotation gets culled even while it is
 	 * the one turned toward you — and the face with no pre-rotation is never
@@ -109,7 +119,6 @@
 		position: absolute;
 		inset: 0;
 		overflow: hidden;
-		background: #fdfbf7;
 		/* The leaf is decorative while turning; taps belong to the page
 		   underneath (and input is locked mid-flip anyway). */
 		pointer-events: none;
@@ -118,7 +127,9 @@
 		animation: face-front var(--leaf-dur) var(--leaf-ease) both;
 	}
 	.face--back {
-		visibility: hidden;
+		/* Blank paper when the sheet has nothing printed on its reverse. */
+		background: #f3ead6;
+		opacity: 0;
 		transform: rotateY(180deg);
 		animation: face-back var(--leaf-dur) var(--leaf-ease) both;
 	}
@@ -126,22 +137,28 @@
 	@keyframes face-front {
 		0%,
 		49.99% {
-			visibility: visible;
+			opacity: 1;
 		}
 		50%,
 		100% {
-			visibility: hidden;
+			opacity: 0;
 		}
 	}
 	@keyframes face-back {
 		0%,
 		49.99% {
-			visibility: hidden;
+			opacity: 0;
 		}
 		50%,
 		100% {
-			visibility: visible;
+			opacity: 1;
 		}
+	}
+
+	.leaf-reverse,
+	.leaf-reverse .face,
+	.leaf-reverse .face::after {
+		animation-direction: reverse;
 	}
 
 	/* Shading near the spine side of each face. */
@@ -153,14 +170,14 @@
 		z-index: 30;
 	}
 	.leaf-next .face--front::after {
-		background: linear-gradient(to right, rgba(30, 24, 12, 0.55), transparent 52%);
+		background: linear-gradient(to right, rgba(6, 8, 20, 0.6), transparent 52%);
 	}
 	.leaf-next .face--back::after,
 	.leaf-prev .face--front::after {
-		background: linear-gradient(to left, rgba(30, 24, 12, 0.55), transparent 52%);
+		background: linear-gradient(to left, rgba(6, 8, 20, 0.6), transparent 52%);
 	}
 	.leaf-prev .face--back::after {
-		background: linear-gradient(to right, rgba(30, 24, 12, 0.55), transparent 52%);
+		background: linear-gradient(to right, rgba(6, 8, 20, 0.6), transparent 52%);
 	}
 
 	.leaf-next .face--front::after,

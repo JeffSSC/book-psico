@@ -1,33 +1,32 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import type { BookPage, PageSide } from '../../types/book';
+	import type { BookFace } from '../../types/book';
 	import { bookStore } from '../../stores/bookStore.svelte';
-	import PageView from './PageView.svelte';
+	import FaceView from './FaceView.svelte';
+	import PageLeaf from './PageLeaf.svelte';
 	import { PAGE_HEIGHT, PAGE_WIDTH } from './pageScale';
 	import { prefersReducedMotion } from './reducedMotion';
 
 	/**
-	 * The mobile view: one page at a time, and every step is a slide.
-	 *
-	 * The track is the whole book laid out side by side and is NEVER
-	 * recomposed: navigating only moves the window (one transform on
-	 * one element). That makes the motion always a clean single slide
-	 * in one direction — the track value changes when navigation
-	 * starts and stays put when the position commits, so there is no
-	 * ghost re-slide and a transition can never be interrupted into
-	 * a value-equal no-op (which would swallow the transitionend and
-	 * freeze the navigation).
+	 * The phone view: one face at a time, turned like a single sheet hinged
+	 * on its left edge. Going forward the sheet on screen lifts away and
+	 * shows the next one beneath; going back the previous sheet returns and
+	 * lands on top.
 	 */
 
 	let {
-		pages,
+		sides,
 		scale,
+		sizes,
 		onTransitionEnd
 	}: {
-		pages: BookPage[];
+		/** The sides of the book in order; `null` is an empty side. */
+		sides: (BookFace | null)[];
 		/** Uniform scale computed by the scene (fitScale helpers). */
 		scale: number;
-		/** Commit the pending position when the slide finishes. */
+		/** `sizes` of one page image, shared with the scene's preloads. */
+		sizes: string;
+		/** Commit the pending position when the turn finishes. */
 		onTransitionEnd: () => void;
 	} = $props();
 
@@ -36,44 +35,29 @@
 		reduced = prefersReducedMotion();
 	});
 
-	const current = $derived(bookStore.spreadIndex);
-	const side = $derived(bookStore.side);
 	const pending = $derived(bookStore.pending);
+	const direction = $derived(bookStore.flipDirection);
 	const isFlipping = $derived(bookStore.isFlipping);
+	const turning = $derived(isFlipping && !reduced);
 
-	const currentIdx = $derived(current * 2 + (side === 'right' ? 1 : 0));
+	const currentIdx = $derived(bookStore.pageIndexOfSide);
 	const targetIdx = $derived(
 		isFlipping && pending
 			? pending.spreadIndex * 2 + (pending.side === 'right' ? 1 : 0)
 			: currentIdx
 	);
 
-	/** The page that should sit in the window. */
-	const restingIdx = $derived(targetIdx);
+	/** The sheet in the air: the one leaving (forward) or the one returning (back). */
+	const leafFace = $derived(sides[direction === 'next' ? currentIdx : targetIdx]);
+	/** The sheet lying flat beneath it. */
+	const restingFace = $derived(
+		sides[turning ? (direction === 'next' ? targetIdx : currentIdx) : targetIdx]
+	);
 
-	/**
-	 * A far jump (table of contents) would sweep the whole book
-	 * across the screen, so it cuts straight to the page —
-	 * see AD/UI/2D-UI.md §15.
-	 */
-	const isFarJump = $derived(isFlipping && Math.abs(targetIdx - currentIdx) > 1);
-
-	/**
-	 * Window position over the static track. It depends on
-	 * `restingIdx` only, so it changes when a move STARTS and does
-	 * not change again when the move commits (currentIdx becomes
-	 * targetIdx). That keeps the DOM static throughout the move.
-	 */
-	const trackX = $derived(-restingIdx * PAGE_WIDTH);
-
-	const page = (i: number): BookPage => pages[i] ?? pages[0];
-	const sideOf = (i: number): PageSide => (i % 2 === 0 ? 'left' : 'right');
-
-	// Reduced motion and far jumps have nothing to animate, so the
-	// position is committed on the next frame instead of on a
-	// transition end (CSS transitions are off for the former).
+	// Reduced motion has nothing to animate, so the position is
+	// committed on the next frame instead of on an animation end.
 	$effect(() => {
-		if (isFlipping && (reduced || isFarJump)) {
+		if (isFlipping && reduced) {
 			const frame = requestAnimationFrame(() => onTransitionEnd());
 			return () => cancelAnimationFrame(frame);
 		}
@@ -84,34 +68,26 @@
 	class="single-frame"
 	style:width={`${PAGE_WIDTH * scale}px`}
 	style:height={`${PAGE_HEIGHT * scale}px`}
+	style:--page-w={`${PAGE_WIDTH}px`}
+	style:--page-h={`${PAGE_HEIGHT}px`}
 >
 	<div class="single" style:transform={`scale(${scale})`}>
-		{#if isFarJump}
-			<PageView page={page(targetIdx)} side={sideOf(targetIdx)} showNumber={targetIdx !== 0} />
-		{:else}
-			<div
-				class="slide-track"
-				style:width={`${pages.length * PAGE_WIDTH}px`}
-				style:transform={`translateX(${trackX}px)`}
-				ontransitionend={(event) => {
-					if (event.target === event.currentTarget && event.propertyName === 'transform') {
-						onTransitionEnd();
-					}
-				}}
-			>
-				{#each pages as entry, index (entry.id)}
-					<!-- Only the page in the window is on screen; the others stay
-						mounted in the static track but are hidden from assistive
-						tech and removed from the tab order. -->
-					<div
-						class="track-slot"
-						class:track-slot--offscreen={index !== restingIdx}
-						aria-hidden={index !== restingIdx}
-						inert={index !== restingIdx}
-					>
-						<PageView page={entry} side={sideOf(index)} showNumber={entry.pageNumber !== 1} />
-					</div>
-				{/each}
+		{#if restingFace}
+			<div class="sheet">
+				<FaceView face={restingFace} {sizes} />
+			</div>
+		{/if}
+
+		{#if turning && leafFace}
+			<div class="sheet sheet--turning">
+				<PageLeaf
+					frontPage={leafFace}
+					backPage={null}
+					direction="next"
+					reverse={direction === 'prev'}
+					{sizes}
+					onEnd={onTransitionEnd}
+				/>
 			</div>
 		{/if}
 	</div>
@@ -125,27 +101,24 @@
 
 	.single {
 		position: relative;
-		width: 512px;
-		height: 720px;
-		overflow: hidden;
+		width: var(--page-w);
+		height: var(--page-h);
+		perspective: 1700px;
 		/* Fitted to the frame by the scene's scale. */
 		transform-origin: top left;
 	}
 
-	.slide-track {
-		display: flex;
-		height: 720px;
-		transition: transform 340ms cubic-bezier(0.3, 0, 0.2, 1);
-		will-change: transform;
+	.sheet {
+		position: absolute;
+		inset: 0;
+		box-shadow:
+			0 2px 4px rgba(74, 48, 16, 0.3),
+			0 14px 32px rgba(74, 48, 16, 0.35);
 	}
 
-	.track-slot {
-		display: contents;
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.slide-track {
-			transition: none;
-		}
+	/* Keeps the leaf's 3D in the page's perspective context. */
+	.sheet--turning {
+		box-shadow: none;
+		transform-style: preserve-3d;
 	}
 </style>

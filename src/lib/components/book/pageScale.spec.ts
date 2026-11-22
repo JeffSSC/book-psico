@@ -1,22 +1,39 @@
 import { describe, expect, it } from 'vitest';
 import {
-	GUTTER,
 	PAGE_HEIGHT,
 	PAGE_WIDTH,
 	SPREAD_HEIGHT,
 	SPREAD_WIDTH,
 	fitScale,
 	singleScale,
-	spreadScale
+	PAGE_SIZES,
+	spreadScale,
+	viewModeFor
 } from './pageScale';
 
 describe('pageScale', () => {
-	it('defines a 512x720 page and a two-page spread with an 8px gutter', () => {
-		expect(PAGE_WIDTH).toBe(512);
-		expect(PAGE_HEIGHT).toBe(720);
-		expect(GUTTER).toBe(8);
-		expect(SPREAD_WIDTH).toBe(512 * 2 + 8);
+	it('defines a 3:4 page and a gutterless spread', () => {
+		expect(PAGE_WIDTH / PAGE_HEIGHT).toBe(3 / 4);
+		expect(SPREAD_WIDTH).toBe(2 * PAGE_WIDTH);
 		expect(SPREAD_HEIGHT).toBe(PAGE_HEIGHT);
+	});
+
+	it('viewModeFor picks the spread only when two pages fit well', () => {
+		expect(viewModeFor(1440, 900)).toBe('spread');
+		expect(viewModeFor(1180, 820)).toBe('spread');
+		expect(viewModeFor(390, 844)).toBe('single');
+		expect(viewModeFor(820, 1180)).toBe('single');
+	});
+
+	it('PAGE_SIZES lets a 2x phone take the 720px image', () => {
+		// Phone clause: the share of the viewport width declared for one page.
+		const phoneShare = Number(/, min\((\d+)vw/.exec(PAGE_SIZES)![1]) / 100;
+		// 390 CSS px at 2x would ask for 780 device px; the hint keeps it under 720.
+		expect(390 * phoneShare * 2).toBeLessThanOrEqual(720);
+		// A 3x phone still needs, and gets, the large image.
+		expect(390 * phoneShare * 3).toBeGreaterThan(720);
+		// On a wide screen a page is half the spread, so half the share.
+		expect(PAGE_SIZES).toContain(`min(${(phoneShare * 100) / 2}vw`);
 	});
 
 	it('is constrained by the tighter dimension', () => {

@@ -1,7 +1,6 @@
 /**
- * Web Audio API based sound effects for tactile page turns and subtle interactions.
- * The paper flip uses a bundled mp3 sample (no network requests after load);
- * UI clicks and book open/close sounds are synthesized on the fly with low latency.
+ * The one sound of the HQ: a paper rustle, played with the Web Audio API
+ * from a bundled mp3 sample (no network requests after it loads).
  */
 
 import paperSfxUrl from './paper-sfx.mp3?url';
@@ -103,99 +102,5 @@ export function playPaperFlipSound(
 		});
 	} catch {
 		// Audio may be blocked or uninitialized before user gesture
-	}
-}
-
-/**
- * Subtle tactile click for UI buttons
- */
-export function playSoftClickSound(volume: number = 0.12): void {
-	try {
-		const ctx = getAudioContext();
-		if (!ctx) return;
-
-		const now = ctx.currentTime;
-		const osc = ctx.createOscillator();
-		const gain = ctx.createGain();
-
-		osc.type = 'sine';
-		osc.frequency.setValueAtTime(420, now);
-		osc.frequency.exponentialRampToValueAtTime(180, now + 0.04);
-
-		gain.gain.setValueAtTime(volume, now);
-		gain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
-
-		osc.connect(gain);
-		gain.connect(ctx.destination);
-
-		osc.start(now);
-		osc.stop(now + 0.04);
-	} catch {
-		// Ignore if audio isn't available
-	}
-}
-
-/**
- * Tactile sound for opening the hardcover book
- */
-export function playBookOpenSound(volume: number = 0.18): void {
-	try {
-		const ctx = getAudioContext();
-		if (!ctx) return;
-
-		const now = ctx.currentTime;
-
-		// Gentle low resonance of hardcover opening
-		const osc = ctx.createOscillator();
-		const gain = ctx.createGain();
-
-		osc.type = 'triangle';
-		osc.frequency.setValueAtTime(120, now);
-		osc.frequency.exponentialRampToValueAtTime(60, now + 0.25);
-
-		gain.gain.setValueAtTime(volume * 0.8, now);
-		gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
-
-		osc.connect(gain);
-		gain.connect(ctx.destination);
-
-		osc.start(now);
-		osc.stop(now + 0.26);
-
-		// Also play a quiet paper rustle
-		playPaperFlipSound('next', volume * 0.5);
-	} catch {
-		// Ignore audio errors
-	}
-}
-
-/**
- * Tactile gentle thud for closing the hardcover book
- */
-export function playBookCloseSound(volume: number = 0.22): void {
-	try {
-		const ctx = getAudioContext();
-		if (!ctx) return;
-
-		const now = ctx.currentTime;
-
-		// Soft book cover closing thud
-		const osc = ctx.createOscillator();
-		const gain = ctx.createGain();
-
-		osc.type = 'sine';
-		osc.frequency.setValueAtTime(95, now);
-		osc.frequency.exponentialRampToValueAtTime(35, now + 0.16);
-
-		gain.gain.setValueAtTime(volume, now);
-		gain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
-
-		osc.connect(gain);
-		gain.connect(ctx.destination);
-
-		osc.start(now);
-		osc.stop(now + 0.17);
-	} catch {
-		// Ignore audio errors
 	}
 }
