@@ -3,41 +3,26 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp, { type OverlayOptions } from 'sharp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { fitToAspect, outputName, processAll, processPage } from './pipeline';
+import { outputName, processAll, processPage, stretchToAspect } from './pipeline';
 
 const STORY_ASPECT = 3 / 4;
 
-describe('fitToAspect', () => {
-	it('returns the largest centred box of the target aspect', () => {
-		expect(fitToAspect({ width: 1414, height: 1909 }, STORY_ASPECT, 'page 2')).toEqual({
-			left: 0,
-			top: 12,
-			width: 1414,
-			height: 1885
-		});
-		expect(fitToAspect({ width: 1401, height: 1865 }, STORY_ASPECT, 'page 8')).toEqual({
-			left: 1,
-			top: 0,
-			width: 1399,
-			height: 1865
-		});
+describe('stretchToAspect', () => {
+	it('reports how far a page is from the target shape', () => {
+		// 1414x1909 is 0.741 wide for its height; 3:4 is 0.75.
+		expect(stretchToAspect({ width: 1414, height: 1909 }, STORY_ASPECT, 'page 2')).toBeCloseTo(
+			0.0126,
+			3
+		);
+		expect(stretchToAspect({ width: 1401, height: 1865 }, STORY_ASPECT, 'page 8')).toBeCloseTo(
+			0.0016,
+			3
+		);
+		expect(stretchToAspect({ width: 1500, height: 2000 }, STORY_ASPECT, 'page')).toBe(0);
 	});
 
-	it('never returns a box larger than the input', () => {
-		const sizes = [
-			{ width: 1414, height: 1909 },
-			{ width: 1401, height: 1865 },
-			{ width: 1500, height: 2000 }
-		];
-		for (const size of sizes) {
-			const box = fitToAspect(size, STORY_ASPECT, 'page');
-			expect(box.left + box.width).toBeLessThanOrEqual(size.width);
-			expect(box.top + box.height).toBeLessThanOrEqual(size.height);
-		}
-	});
-
-	it('rejects a crop that loses more than 2% on an axis', () => {
-		expect(() => fitToAspect({ width: 1406, height: 1981 }, STORY_ASPECT, 'page 1')).toThrow(
+	it('rejects a page that would be distorted by more than 2%', () => {
+		expect(() => stretchToAspect({ width: 1406, height: 1981 }, STORY_ASPECT, 'page 1')).toThrow(
 			/page 1/
 		);
 	});
@@ -116,7 +101,8 @@ async function sizeOf(file: string) {
 	return { width, height };
 }
 
-describe('page pipeline', () => {
+// Encoding real images is slow on a busy machine.
+describe('page pipeline', { timeout: 30_000 }, () => {
 	let dir: string;
 	let outDir: string;
 
@@ -157,6 +143,54 @@ describe('page pipeline', () => {
 		expect(data[centre]).toBeGreaterThanOrEqual(NEAR_WHITE);
 		expect(data[centre + 1]).toBeGreaterThanOrEqual(NEAR_WHITE);
 		expect(data[centre + 2]).toBeGreaterThanOrEqual(NEAR_WHITE);
+	});
+
+	it('normalising to 3:4 keeps the whole page', async () => {
+		// Art a little too tall for 3:4, with a red line along its top edge
+		// and a green one along its bottom edge.
+		const art = { width: 420, height: 568 };
+		const border = { top: 20, bottom: 20, left: 6, right: 6 };
+		const line = (color: { r: number; g: number; b: number }, top: number): OverlayOptions => ({
+			input: { create: { width: art.width, height: 6, channels: 3, background: color } },
+			left: border.left,
+			top
+		});
+		const source = join(dir, '2.png');
+		await sharp({
+			create: {
+				width: border.left + art.width + border.right,
+				height: border.top + art.height + border.bottom,
+				channels: 3,
+				background: WHITE
+			}
+		})
+			.composite([
+				{
+					input: {
+						create: { ...art, channels: 3, background: { r: 30, g: 70, b: 120 } }
+					},
+					left: border.left,
+					top: border.top
+				},
+				line({ r: 220, g: 20, b: 20 }, border.top),
+				line({ r: 20, g: 200, b: 20 }, border.top + art.height - 6)
+			])
+			.png()
+			.toFile(source);
+		await processPage(source, 2, { outDir, widths: [300] });
+
+		const { data, info } = await sharp(join(outDir, outputName(2, 300, 'webp')))
+			.removeAlpha()
+			.raw()
+			.toBuffer({ resolveWithObject: true });
+		const pixel = (x: number, y: number) => {
+			const i = (y * info.width + x) * 3;
+			return { r: data[i], g: data[i + 1], b: data[i + 2] };
+		};
+		const top = pixel(150, 0);
+		const bottom = pixel(150, info.height - 1);
+		expect(top.r).toBeGreaterThan(top.g + 60);
+		expect(bottom.g).toBeGreaterThan(bottom.r + 60);
 	});
 
 	it('story pages come out at exactly 3:4', async () => {

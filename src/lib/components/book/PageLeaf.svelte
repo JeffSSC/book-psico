@@ -7,9 +7,9 @@
 	 * The turning leaf, bending like paper. It fills its positioning parent
 	 * (a spread half, or the single page of a phone) and hinges on the spine:
 	 * "next" on its LEFT edge, "prev" on its RIGHT edge. The sheet is cut
-	 * into vertical strips, each hinged on the one before; the free edge
-	 * lifts first and the curl travels to the spine, so the paper bends
-	 * instead of swinging as a board. `reverse` plays a turn backwards: the
+	 * into vertical strips, each turning on the edge of the one before; the
+	 * free edge lifts first and the curl travels to the spine, so the paper
+	 * bends instead of swinging as a board. `reverse` plays a turn backwards: the
 	 * sheet comes back from the far side and lands.
 	 */
 
@@ -63,10 +63,31 @@
 	/** The moment a strip stands edge-on and its faces change places. */
 	const edgeOnAt = (index: number) => (0.5 + LEAD * (1 - index / (STRIPS - 1))) / (1 + LEAD);
 
+	const strips = Array.from({ length: STRIPS }, (_, index) => index);
+
+	/**
+	 * Where strip `index` is at `progress`: every strip from the spine out
+	 * to it turns on its own hinge by the bend it adds to the one before.
+	 * Strips are placed one by one, not nested, so the browser's rounding
+	 * of each to whole pixels cannot add up across the page.
+	 */
+	function placement(index: number, progress: number): string {
+		const sign = direction === 'next' ? -1 : 1;
+		const steps: string[] = [];
+		for (let hinge = 0; hinge <= index; hinge++) {
+			const bend = turned(hinge, progress) - (hinge > 0 ? turned(hinge - 1, progress) : 0);
+			// Distance from this strip's own hinge edge, in strip widths.
+			const away = sign * (index - hinge) * 100;
+			steps.push(
+				`translateX(${away}%) rotateY(${(sign * bend).toFixed(2)}deg) translateX(${-away}%)`
+			);
+		}
+		return steps.join(' ');
+	}
+
 	let stripNodes = $state<HTMLElement[]>([]);
 
 	onMount(() => {
-		const sign = direction === 'next' ? -1 : 1;
 		const timing: KeyframeAnimationOptions = {
 			duration: DURATION,
 			fill: 'both',
@@ -75,9 +96,6 @@
 		const offsets = Array.from({ length: SAMPLES + 1 }, (_, sample) => sample / SAMPLES);
 
 		const animations = stripNodes.flatMap((node, index) => {
-			// Each strip rotates on top of the one it hangs from.
-			const bend = (progress: number) =>
-				turned(index, progress) - (index > 0 ? turned(index - 1, progress) : 0);
 			const swap = edgeOnAt(index);
 			const faces = (visibleFirst: boolean): Keyframe[] => [
 				{ offset: 0, opacity: visibleFirst ? 1 : 0, easing: 'steps(1, end)' },
@@ -86,15 +104,12 @@
 			];
 			return [
 				node.animate(
-					offsets.map((offset) => ({
-						offset,
-						transform: `rotateY(${(sign * bend(offset)).toFixed(2)}deg)`
-					})),
+					offsets.map((offset) => ({ offset, transform: placement(index, offset) })),
 					timing
 				),
-				node.querySelector(':scope > .face--front')!.animate(faces(true), timing),
-				node.querySelector(':scope > .face--back')!.animate(faces(false), timing),
-				...[...node.querySelectorAll(':scope > .face > .shade')].map((shade) =>
+				node.querySelector('.face--front')!.animate(faces(true), timing),
+				node.querySelector('.face--back')!.animate(faces(false), timing),
+				...[...node.querySelectorAll('.shade')].map((shade) =>
 					shade.animate(
 						offsets.map((offset) => ({
 							offset,
@@ -119,43 +134,30 @@
 	});
 </script>
 
-{#snippet strip(index: number)}
-	<div bind:this={stripNodes[index]} class="strip" class:strip--first={index === 0}>
-		<div class="face face--front">
-			<div
-				class="slice"
-				style:width={`${STRIPS * 100}%`}
-				style:left={`${-frontSlice(index) * 100}%`}
-			>
-				<FaceView face={frontPage} side={frontSide} {sizes} />
-			</div>
-			<div class="shade"></div>
-		</div>
-		<div class="face face--back">
-			{#if backPage}
-				<div
-					class="slice"
-					style:width={`${STRIPS * 100}%`}
-					style:left={`${-backSlice(index) * 100}%`}
-				>
-					<FaceView face={backPage} side={backSide} {sizes} />
-				</div>
-			{/if}
-			<div class="shade"></div>
-		</div>
-		{#if index < STRIPS - 1}
-			{@render strip(index + 1)}
-		{/if}
-	</div>
-{/snippet}
-
 <div
 	class="leaf"
 	class:leaf-next={direction === 'next'}
 	class:leaf-prev={direction === 'prev'}
-	style:--strip-w={`${100 / STRIPS}%`}
+	style:--strips={STRIPS}
 >
-	{@render strip(0)}
+	{#each strips as index (index)}
+		<div bind:this={stripNodes[index]} class="strip" style:--from-spine={index}>
+			<div class="face face--front">
+				<div class="slice" style:--slice={frontSlice(index)}>
+					<FaceView face={frontPage} side={frontSide} {sizes} />
+				</div>
+				<div class="shade"></div>
+			</div>
+			<div class="face face--back">
+				{#if backPage}
+					<div class="slice" style:--slice={backSlice(index)}>
+						<FaceView face={backPage} side={backSide} {sizes} />
+					</div>
+				{/if}
+				<div class="shade"></div>
+			</div>
+		</div>
+	{/each}
 </div>
 
 <style>
@@ -168,30 +170,22 @@
 		pointer-events: none;
 	}
 
-	/* A strip hangs from the far edge of the one before it, spine first. */
+	/* Strips stand side by side, counted from the spine. */
 	.strip {
+		--strip-w: calc(100% / var(--strips));
 		position: absolute;
 		top: 0;
-		width: 100%;
+		width: var(--strip-w);
 		height: 100%;
 		transform-style: preserve-3d;
 	}
-	.strip--first {
-		width: var(--strip-w);
-	}
 	.leaf-next .strip {
-		left: 100%;
+		left: calc(var(--from-spine) * var(--strip-w));
 		transform-origin: left center;
 	}
 	.leaf-prev .strip {
-		right: 100%;
+		right: calc(var(--from-spine) * var(--strip-w));
 		transform-origin: right center;
-	}
-	.leaf-next .strip--first {
-		left: 0;
-	}
-	.leaf-prev .strip--first {
-		right: 0;
 	}
 
 	/**
@@ -201,9 +195,10 @@
 	 * shows blank for a frame when its turn comes.
 	 */
 	.face {
+		--overlap: 1px;
 		position: absolute;
 		/* A hair wider than the strip, so no seam shows between neighbours. */
-		inset: 0 -0.5px;
+		inset: 0 calc(-1 * var(--overlap));
 		overflow: hidden;
 	}
 	.face--back {
@@ -213,10 +208,14 @@
 		transform: rotateY(180deg);
 	}
 
-	/* The whole page, of which the face shows one strip's worth. */
+	/* The whole page at its true size, of which the face shows one strip's
+	   worth; sized from the strip, which is the face less its overlap. */
 	.slice {
+		--strip: calc(100% - 2 * var(--overlap));
 		position: absolute;
 		top: 0;
+		left: calc(var(--overlap) - var(--slice) * var(--strip));
+		width: calc(var(--strips) * var(--strip));
 		height: 100%;
 	}
 

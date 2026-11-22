@@ -186,5 +186,6 @@
 
 ## 7. Updates
 
-| Date | Change | Sections touched |
-| ---- | ------ | ---------------- |
+| Date       | Change                                                                                                                                                                                                                                                 | Sections touched                                            |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
+| 2026-11-22 | Story pages are reshaped to 3:4 (at most 2% stretch) instead of centre-cropped, because the crop cut the title banner at the top of page 8; `fitToAspect` became `stretchToAspect`, a test checks the whole page is kept, and all images were rebuilt. | TDD (T1, T2), Business Rules (R3), Technical Implementation |

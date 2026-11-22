@@ -7,35 +7,23 @@ export interface Size {
 	height: number;
 }
 
-export interface Box extends Size {
-	left: number;
-	top: number;
-}
-
 export type ImageFormat = 'avif' | 'webp';
 
-/** Largest share of an axis that normalising a page may cut away. */
-const MAX_CROP_LOSS = 0.02;
+/** Furthest a page may be reshaped to reach the target aspect. */
+const MAX_STRETCH = 0.02;
 
 /**
- * Largest centred box of `aspect` (width / height) inside `size`.
- * Throws when the crop would cut more than MAX_CROP_LOSS of an axis.
+ * Relative stretch that brings `size` to `aspect` (width / height) without
+ * cropping anything. Throws when it would exceed MAX_STRETCH.
  */
-export function fitToAspect(size: Size, aspect: number, label: string): Box {
-	const width = Math.min(size.width, Math.round(size.height * aspect));
-	const height = Math.min(size.height, Math.round(size.width / aspect));
-	const loss = Math.max(1 - width / size.width, 1 - height / size.height);
-	if (loss > MAX_CROP_LOSS) {
+export function stretchToAspect(size: Size, aspect: number, label: string): number {
+	const stretch = Math.abs(aspect / (size.width / size.height) - 1);
+	if (stretch > MAX_STRETCH) {
 		throw new Error(
-			`${label}: fitting ${size.width}x${size.height} to aspect ${aspect.toFixed(3)} would cut ${(loss * 100).toFixed(1)}% of the art`
+			`${label}: reshaping ${size.width}x${size.height} to aspect ${aspect.toFixed(3)} would distort the art by ${(stretch * 100).toFixed(1)}%`
 		);
 	}
-	return {
-		left: Math.floor((size.width - width) / 2),
-		top: Math.floor((size.height - height) / 2),
-		width,
-		height
-	};
+	return stretch;
 }
 
 export function outputName(page: number, width: number, format: ImageFormat): string {
@@ -67,7 +55,7 @@ const HALO = 2;
 /**
  * Trims the white border of one source page and writes it as AVIF and WebP
  * at each width (never wider than the trimmed art). Story pages are
- * normalised to 3:4 so the two halves of a spread align.
+ * reshaped to 3:4, whole, so the two halves of a spread align.
  */
 export async function processPage(
 	source: string,
@@ -83,19 +71,18 @@ export async function processPage(
 		width: trimmed.info.width - HALO * 2,
 		height: trimmed.info.height - HALO * 2
 	};
-	const fitted: Box =
-		page === COVER_PAGE ? { left: 0, top: 0, ...inner } : fitToAspect(inner, STORY_ASPECT, label);
+	if (page !== COVER_PAGE) stretchToAspect(inner, STORY_ASPECT, label);
 	const art = await sharp(trimmed.data)
-		.extract({ ...fitted, left: fitted.left + HALO, top: fitted.top + HALO })
+		.extract({ left: HALO, top: HALO, ...inner })
 		.toBuffer();
 
 	await mkdir(options.outDir, { recursive: true });
 	let largest: Size = { width: 0, height: 0 };
 	for (const nominal of options.widths) {
-		const width = Math.min(nominal, fitted.width);
+		const width = Math.min(nominal, inner.width);
 		const height =
 			page === COVER_PAGE
-				? Math.round((width * fitted.height) / fitted.width)
+				? Math.round((width * inner.height) / inner.width)
 				: Math.round(width / STORY_ASPECT);
 		const resized = sharp(art).resize(width, height, { fit: 'fill' });
 		await resized
