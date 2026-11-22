@@ -31,6 +31,9 @@ async function mountAt(
 ) {
 	bookStore.isFlipping = false;
 	bookStore.pending = null;
+	localStorage.clear();
+	// The reader picks its framing from the screen, so give it the right one.
+	await (mode === 'single' ? page.viewport(390, 844) : page.viewport(1280, 800));
 	render(BookScene, { comic });
 	// Wait for mount-time registration before touching the store.
 	await vi.waitFor(() => {
@@ -70,8 +73,9 @@ const previousArea = () => page.getByRole('button', { name: 'Página anterior' }
 const nextArea = () => page.getByRole('button', { name: 'Próxima página' });
 const backCover = () => page.getByRole('img', { name: 'Contracapa' });
 const stage = () => document.querySelector<HTMLElement>('.scene')!;
+/** Names of the buttons a reader can reach (inert ones are not there for them). */
 const buttonNames = () =>
-	[...document.querySelectorAll('button')]
+	[...document.querySelectorAll('button:not([inert])')]
 		.map((button) => button.getAttribute('aria-label'))
 		.sort();
 
@@ -266,14 +270,55 @@ describe('BookScene.svelte', () => {
 		expect(document.activeElement).toBe(forward);
 	});
 
+	it('keyboard focus moves to the other area when its own goes away', async () => {
+		// Forward disappears on the back cover: focus passes to the back area.
+		await mountAt('spread', LAST_SPREAD);
+		nextArea().element().focus();
+		await userEvent.keyboard('{Enter}');
+		await settled({ spreadIndex: BACK_COVER_SPREAD });
+		expect(document.activeElement?.getAttribute('aria-label')).toBe('Página anterior');
+
+		// Back disappears on the cover: focus passes to the forward area.
+		bookStore.spreadIndex = FIRST_SPREAD;
+		await nextFrames();
+		previousArea().element().focus();
+		await userEvent.keyboard('{Enter}');
+		await settled({ spreadIndex: 0 });
+		expect(document.activeElement?.getAttribute('aria-label')).toBe(OPEN_LABEL);
+	});
+
+	it('a returning reader finds the book open where they stopped', async () => {
+		localStorage.setItem('parque_position', JSON.stringify({ spread: 3, side: 'left' }));
+		bookStore.isFlipping = false;
+		bookStore.pending = null;
+		bookStore.spreadIndex = 0;
+		bookStore.side = 'right';
+		await page.viewport(1280, 800);
+		render(BookScene, { comic });
+
+		await vi.waitFor(() => {
+			expect(bookStore.spreadIndex).toBe(3);
+		});
+		await nextFrames();
+		expect(shownPages()).toEqual(spreadPages(3));
+
+		// Each image is the art its alt text names, not what was drawn before.
+		const images = [...document.querySelectorAll<HTMLImageElement>('.book img')];
+		await vi.waitFor(() => {
+			expect(images.map((img) => /(\d\d)-\d+\./.exec(img.currentSrc)?.[1])).toEqual(['06', '07']);
+		});
+		localStorage.clear();
+	});
+
 	it('only mounts the pages on screen', async () => {
 		await mountAt('spread', FIRST_SPREAD);
 		expect(document.querySelectorAll('.book img').length).toBe(2);
 
-		// Mid-turn the leaf adds its two faces, never the whole HQ.
+		// Mid-turn the bending leaf draws its two faces in strips: four pages
+		// are on screen at most, never the whole HQ.
 		bookStore.next();
 		await nextFrames();
-		expect(document.querySelectorAll('.book img').length).toBeLessThanOrEqual(4);
+		expect(new Set(shownPages()).size).toBeLessThanOrEqual(4);
 		await settled({ spreadIndex: 2 });
 		expect(document.querySelectorAll('.book img').length).toBe(2);
 	});
@@ -339,15 +384,15 @@ describe('BookScene.svelte', () => {
 	it('a horizontal swipe turns the page on a phone', async () => {
 		await mountAt('single', FIRST_SPREAD);
 
-		drag({ x: 400, y: 400 }, { x: 340, y: 406 });
+		drag({ x: 300, y: 400 }, { x: 240, y: 406 });
 		await settled({ spreadIndex: FIRST_SPREAD, side: 'right' });
 
-		drag({ x: 340, y: 400 }, { x: 400, y: 396 });
+		drag({ x: 240, y: 400 }, { x: 300, y: 396 });
 		await settled({ spreadIndex: FIRST_SPREAD, side: 'left' });
 
 		// The click a browser sends after a drag must not turn a second page,
 		// even when the first turn has already landed.
-		drag({ x: 700, y: 400 }, { x: 640, y: 400 });
+		drag({ x: 300, y: 400 }, { x: 240, y: 400 });
 		bookStore.completeTransition();
 		nextArea()
 			.element()
@@ -357,7 +402,7 @@ describe('BookScene.svelte', () => {
 		await nextFrames();
 
 		// A vertical drag is a scroll gesture, not a page turn.
-		drag({ x: 400, y: 300 }, { x: 410, y: 420 });
+		drag({ x: 200, y: 300 }, { x: 210, y: 420 });
 		await nextFrames();
 		expect(bookStore.isFlipping).toBe(false);
 		expect(bookStore.pageIndexOfSide).toBe(3);
@@ -369,11 +414,11 @@ describe('BookScene.svelte', () => {
 		// Whichever finger travels sideways, a pinch is not a swipe.
 		for (const moving of [1, 2]) {
 			const still = moving === 1 ? 2 : 1;
-			pointer('pointerdown', { x: 400, y: 400 }, 1);
-			pointer('pointerdown', { x: 500, y: 420 }, 2);
-			pointer('pointermove', { x: 300, y: 400 }, moving);
-			pointer('pointerup', { x: 300, y: 400 }, moving);
-			pointer('pointerup', { x: 450, y: 410 }, still);
+			pointer('pointerdown', { x: 250, y: 400 }, 1);
+			pointer('pointerdown', { x: 350, y: 420 }, 2);
+			pointer('pointermove', { x: 150, y: 400 }, moving);
+			pointer('pointerup', { x: 150, y: 400 }, moving);
+			pointer('pointerup', { x: 300, y: 410 }, still);
 			await nextFrames();
 
 			expect(bookStore.isFlipping).toBe(false);
@@ -381,7 +426,7 @@ describe('BookScene.svelte', () => {
 		}
 
 		// One finger alone still swipes afterwards.
-		drag({ x: 400, y: 400 }, { x: 320, y: 400 });
+		drag({ x: 300, y: 400 }, { x: 220, y: 400 });
 		await settled({ spreadIndex: FIRST_SPREAD, side: 'right' });
 	});
 

@@ -54,39 +54,38 @@ export class BookStore {
 	/** 0-based index of the side shown on a phone (or the spread's left side). */
 	pageIndexOfSide = $derived(this.spreadIndex * 2 + (this.side === 'right' ? 1 : 0));
 
-	constructor() {
-		if (typeof window !== 'undefined') {
-			try {
-				const raw = localStorage.getItem(POSITION_KEY);
-				if (raw !== null) {
-					const pos = JSON.parse(raw) as { spread?: unknown; side?: unknown };
-					if (
-						typeof pos.spread === 'number' &&
-						Number.isInteger(pos.spread) &&
-						pos.spread >= 0 &&
-						(pos.side === 'left' || pos.side === 'right')
-					) {
-						this.spreadIndex = pos.spread;
-						this.side = pos.side;
-					}
-				}
-			} catch {
-				// Local storage might not be accessible
-			}
-		}
-	}
-
 	/* ---------------- Content registration ---------------- */
 
 	/** Takes the sides of the book in order; `null` marks an empty side. */
 	registerPages(sides: ({ id: string } | null)[]) {
 		this.filled = sides.map((entry) => entry !== null);
 		this.totalPages = sides.length;
-		const last = Math.max(this.totalSpreads - 1, 0);
-		if (this.spreadIndex > last) {
-			this.spreadIndex = last;
+		this.restInsideTheBook();
+	}
+
+	/**
+	 * Returns to the position saved by an earlier visit. Called once the
+	 * page is on screen, so the first render always matches the server's.
+	 */
+	restorePosition() {
+		if (typeof window === 'undefined') return;
+		try {
+			const raw = localStorage.getItem(POSITION_KEY);
+			if (raw === null) return;
+			const pos = JSON.parse(raw) as { spread?: unknown; side?: unknown };
+			if (
+				typeof pos.spread === 'number' &&
+				Number.isInteger(pos.spread) &&
+				pos.spread >= 0 &&
+				(pos.side === 'left' || pos.side === 'right')
+			) {
+				this.spreadIndex = pos.spread;
+				this.side = pos.side;
+				this.restInsideTheBook();
+			}
+		} catch {
+			// Local storage might not be accessible
 		}
-		this.restOnFilledSide();
 	}
 
 	/* ---------------- View mode ---------------- */
@@ -100,7 +99,7 @@ export class BookStore {
 		if (mode === this.mode) return;
 		if (this.isFlipping) return;
 		this.mode = mode;
-		this.restOnFilledSide();
+		this.restInsideTheBook();
 	}
 
 	/* ---------------- Navigation ---------------- */
@@ -158,7 +157,10 @@ export class BookStore {
 		return side === 'left' ? 'right' : 'left';
 	}
 
-	private restOnFilledSide() {
+	/** Brings the position onto a spread that exists and a side that is filled. */
+	private restInsideTheBook() {
+		if (this.totalPages === 0) return;
+		this.spreadIndex = Math.min(this.spreadIndex, this.totalSpreads - 1);
 		this.side = this.restingSide(this.spreadIndex, this.side);
 	}
 
@@ -187,8 +189,8 @@ export class BookStore {
 
 		playPaperFlipSound(direction);
 
-		// The commit normally arrives via transitionend; if the browser
-		// loses it (hidden tab, the node unmounting mid-move), commit
+		// The commit normally arrives when the leaf's animation ends; if the
+		// browser loses it (hidden tab, the leaf unmounted mid-turn), commit
 		// anyway so turns can never stay blocked.
 		this.clearFlipSafety();
 		this.flipSafetyTimer = setTimeout(() => this.completeTransition(), FLIP_SAFETY_MS);

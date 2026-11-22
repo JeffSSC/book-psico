@@ -59,6 +59,7 @@ export interface ExperienceCopy {
 export interface ReaderCopy {
 	previousRegionLabel: string;
 	nextRegionLabel: string;
+	returnToCoverLabel: string;
 	backCoverLabel: string;
 }
 

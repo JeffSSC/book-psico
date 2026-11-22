@@ -18,6 +18,7 @@ export const bookUiCopy: BookUiCopy = {
 	reader: {
 		previousRegionLabel: 'Página anterior',
 		nextRegionLabel: 'Próxima página',
+		returnToCoverLabel: 'Voltar à capa',
 		backCoverLabel: 'Contracapa'
 	}
 };

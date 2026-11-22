@@ -1,6 +1,6 @@
 # Minimal book reader
 
-- **Status:** in-progress
+- **Status:** done
 - **Tests approved:** yes
 - **Briefing:** Make the HQ reader minimalist and book-like: no header, no footer, no Sumário, no sound button, no close button, no zoom. Click the left page to go back and the right page to go forward. Only the paper sound remains. Brighter (warm parchment) background.
 
@@ -167,6 +167,7 @@
   - Answers given: back cover is plain, in the cover's colours; phones flip too; the book reopens where the reader stopped; S1–S5 ticked.
   - The cover image is slightly taller than a page (0.71 vs 0.75), so as a leaf it is cropped about 2.7% at the top and bottom.
   - In spread mode the empty half beside a closed cover is not clickable; on the back cover the forward step is the right arrow key (or, on a phone, the right half and a swipe).
+  - Known limits after review: the book is laid out by script, so the cover appears once JavaScript has measured the screen (a `<noscript>` rule shows it unscaled without JS); the first load also fetches the first two story pages at low priority.
 - **Edge cases:**
   - Clicks during a turn are ignored, as today, so a double click turns one page.
   - A click that ends a swipe is swallowed, so a swipe never turns two pages.
@@ -192,12 +193,12 @@
 - [x] S5: Look — parchment stage, light-stage shadows, no fireflies or hint, light theme colour; check the production build at 1440×900 and 390×844 (T20)
   - Test T20; files `BookScene.svelte`, `BookCover.svelte`, `BookSpread.svelte`, `ComicPage.svelte`, `PageLeaf.svelte`, `layout.css`, `app.html`. Also done here on request: spine shadow and crease where the pages meet; fix for a one-frame blank leaf face mid-turn (faces load eagerly, decode before paint, swap by opacity), confirmed by capturing every painted frame of three turns. Checked on the production build at 1440×900 and 390×844.
 
-- [ ] S6: rework S1 — the store has no closed/opening/closing states: the cover and back cover are the first and last positions; `goToCover`; phone walk skips empty sides (T1, T2, T4, T21, T22, T23)
-  - Implemented, tests green (80 passing), checked in Chromium at 1440×900 and 390×844; committed at the user's request before the review round, which is still to run.
-- [ ] S7: rework S4 — cover and back cover as leaves in spread mode: `bookFaces`, drawn back cover, closed book centred, forward-first focus (T8, T9, T13, T14, T15, T24, T26, T27)
-  - Implemented, tests green (80 passing), checked in Chromium at 1440×900 and 390×844; committed at the user's request before the review round, which is still to run.
-- [ ] S8: rework S4 — phone steps flip instead of slide, covers included (T11, T16, T25)
-  - Implemented, tests green (80 passing), checked in Chromium at 1440×900 and 390×844; committed at the user's request before the review round, which is still to run.
+- [x] S6: rework S1 — the store has no closed/opening/closing states: the cover and back cover are the first and last positions; `goToCover`; phone walk skips empty sides (T1, T2, T4, T21, T22, T23)
+  - Tests T1, T2, T4, T21–T23 plus saved-position clamping and mode switch at the covers, in `bookStore.spec.ts` and `comic.spec.ts`; files `bookStore.svelte.ts`, `comic.ts`, `types/book.ts`. Reviewed with S7–S8: 1 round, 7 blocking findings, all fixed. The saved position is now restored after mount (`restorePosition`), so the first render always matches the prerendered cover.
+- [x] S7: rework S4 — cover and back cover as leaves in spread mode: `bookFaces`, drawn back cover, closed book centred, forward-first focus (T8, T9, T13, T14, T15, T24, T26, T27)
+  - Tests T8, T9, T13–T15, T24, T26, T27 plus focus hand-over at the covers and a returning-reader test (added after review) in `BookScene.svelte.spec.ts`; files `BookScene.svelte`, `BookSpread.svelte`, `PageLeaf.svelte`, new `FaceView.svelte` and `BackCover.svelte`, `pageScale.ts` (`PAGE_SIZES` replaces `imageSizes`), `uiCopy.ts`, `app.html`; deleted `BookCover.svelte`. Both page-area buttons stay mounted; the one with no page under it is inert.
+- [x] S8: rework S4 — phone steps flip instead of slide, covers included (T11, T16, T25)
+  - Tests T11, T16, T25 in `BookScene.svelte.spec.ts` (phone tests now run in a 390×844 viewport); file `BookSinglePage.svelte`, `PageLeaf.svelte` (`reverse`, blank back). Checked on the production build in Chromium at 1440×900 and 390×844: cover turn captured frame by frame, reload at a saved spread shows the right art, no slide-in on first phone layout, no console errors.
 
 ## 7. Updates
 

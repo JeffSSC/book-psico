@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { bookStore } from '../../stores/bookStore.svelte';
 	import { bookMeta } from '../../data/bookMeta';
 	import { bookSides, pageSources, pagesToPreload } from '../../data/comic';
@@ -30,9 +30,10 @@
 
 	const sides = $derived(bookSides(comic));
 
-	// Register once so the first paint already knows the shape of the book.
+	// Untracked: only a new book registers again, not every turn of a page.
 	$effect(() => {
-		bookStore.registerPages(sides);
+		const book = sides;
+		untrack(() => bookStore.registerPages(book));
 	});
 
 	let viewport = $state<HTMLElement | null>(null);
@@ -71,6 +72,27 @@
 	const showBackArea = $derived(!atCover);
 	const showForwardArea = $derived(mode === 'single' || !atBackCover);
 
+	const forwardLabel = $derived(
+		atCover
+			? bookUiCopy.experience.openLabel
+			: atBackCover
+				? bookUiCopy.reader.returnToCoverLabel
+				: bookUiCopy.reader.nextRegionLabel
+	);
+
+	let forwardArea = $state<HTMLButtonElement | null>(null);
+	let backArea = $state<HTMLButtonElement | null>(null);
+
+	// Before an area goes away, a keyboard reader's focus passes to the other.
+	$effect.pre(() => {
+		const [leaving, staying] = !showForwardArea
+			? [forwardArea, backArea]
+			: !showBackArea
+				? [backArea, forwardArea]
+				: [null, null];
+		if (leaving && document.activeElement === leaving) staying?.focus();
+	});
+
 	/** Pages fetched ahead of need: whatever the next forward step will show. */
 	const preloadPages = $derived(
 		pagesToPreload(
@@ -104,6 +126,8 @@
 	}
 
 	function handleKeyDown(event: KeyboardEvent) {
+		// Alt+arrows and the like belong to the browser.
+		if (event.altKey || event.ctrlKey || event.metaKey) return;
 		switch (event.key) {
 			case 'ArrowRight':
 			case 'PageDown':
@@ -122,7 +146,13 @@
 		}
 	}
 
+	// A resize that arrives mid-turn is not applied, so measure again after it.
+	$effect(() => {
+		if (!bookStore.isFlipping) untrack(measure);
+	});
+
 	onMount(() => {
+		bookStore.restorePosition();
 		measure();
 		const observer = new ResizeObserver(measure);
 		if (viewport) observer.observe(viewport);
@@ -166,6 +196,7 @@
 	<div
 		class="book"
 		class:book--measured={avail !== null}
+		class:book--turning={bookStore.isFlipping}
 		style:width={`${bookBoxWidth}px`}
 		style:height={`${bookBoxHeight}px`}
 		style:transform={`translateX(${bookShift}px)`}
@@ -188,23 +219,23 @@
 
 		<!-- The right of the book goes forward, the left goes back. Forward
 		     comes first so it is the first stop for the keyboard. -->
-		{#if showForwardArea}
-			<button
-				type="button"
-				class="page-area page-area--forward"
-				class:page-area--whole={!showBackArea && mode === 'single'}
-				aria-label={atCover ? bookUiCopy.experience.openLabel : bookUiCopy.reader.nextRegionLabel}
-				onclick={() => bookStore.next()}
-			></button>
-		{/if}
-		{#if showBackArea}
-			<button
-				type="button"
-				class="page-area page-area--back"
-				aria-label={bookUiCopy.reader.previousRegionLabel}
-				onclick={() => bookStore.prev()}
-			></button>
-		{/if}
+		<button
+			bind:this={forwardArea}
+			type="button"
+			class="page-area page-area--forward"
+			class:page-area--whole={!showBackArea && mode === 'single'}
+			inert={!showForwardArea}
+			aria-label={forwardLabel}
+			onclick={() => bookStore.next()}
+		></button>
+		<button
+			bind:this={backArea}
+			type="button"
+			class="page-area page-area--back"
+			inert={!showBackArea}
+			aria-label={bookUiCopy.reader.previousRegionLabel}
+			onclick={() => bookStore.prev()}
+		></button>
 	</div>
 </div>
 
@@ -258,14 +289,19 @@
 	.page-area--whole {
 		width: 100%;
 	}
+	/* An area with no page under it takes no clicks and no focus. */
+	.page-area[inert] {
+		display: none;
+	}
 	.page-area:focus-visible {
 		outline: 3px solid #b4691f;
 		outline-offset: -3px;
 	}
 
-	/* The book slides to or from the middle of the table as a cover turns. */
+	/* The book slides to or from the middle of the table as a cover turns;
+	   resizes and the first layout place it at once. */
 	@media (prefers-reduced-motion: no-preference) {
-		.book--measured {
+		.book--turning {
 			transition: transform 700ms cubic-bezier(0.45, 0, 0.55, 1);
 		}
 	}

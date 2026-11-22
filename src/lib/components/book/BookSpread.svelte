@@ -12,12 +12,9 @@
 	 * cover alone on the right, the finished book the back cover alone on
 	 * the left.
 	 *
-	 * The store commits a spread change only when the leaf lands, so
-	 * during a turn `spreadIndex` is the spread being left and
-	 * `pending` is the one being opened. The leaf bridges the leaving
-	 * spread's right side to the incoming spread's left side; beneath
-	 * it we always show the leaving left side (read) and the incoming
-	 * right side (unread).
+	 * The store commits a spread change only when the leaf lands, so during
+	 * a turn `spreadIndex` is the spread being left and `pending` the one
+	 * being opened; the leaf carries one side of each.
 	 */
 
 	let {

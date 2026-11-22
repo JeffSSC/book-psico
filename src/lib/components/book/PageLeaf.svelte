@@ -1,17 +1,16 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import type { BookFace, FlipDirection, PageSide } from '../../types/book';
 	import FaceView from './FaceView.svelte';
 
 	/**
-	 * The turning leaf. It fills its positioning parent (a spread half, or
-	 * the single page of a phone) and hinges on the spine:
-	 *
-	 * - "next" leaves hinge on their LEFT edge and rotate 0 -> -180deg,
-	 * - "prev" leaves hinge on their RIGHT edge and rotate 0 -> +180deg,
-	 *
-	 * so the free edge always lifts toward the viewer (out of the table) and
-	 * the leaf sweeps to the other side of the spine. `reverse` plays a turn
-	 * backwards: the sheet comes back from the far side and lands.
+	 * The turning leaf, bending like paper. It fills its positioning parent
+	 * (a spread half, or the single page of a phone) and hinges on the spine:
+	 * "next" on its LEFT edge, "prev" on its RIGHT edge. The sheet is cut
+	 * into vertical strips, each hinged on the one before; the free edge
+	 * lifts first and the curl travels to the spine, so the paper bends
+	 * instead of swinging as a board. `reverse` plays a turn backwards: the
+	 * sheet comes back from the far side and lands.
 	 */
 
 	let {
@@ -39,28 +38,124 @@
 		onEnd: () => void;
 	} = $props();
 
-	function handleAnimationEnd(event: AnimationEvent) {
-		// Pseudo-element (shade) animations also report to their host face;
-		// only the leaf's own rotation completes the turn.
-		if (event.target === event.currentTarget) onEnd();
+	/** Strips the sheet is cut into; more is smoother and heavier. */
+	const STRIPS = 8;
+	const DURATION = 760;
+	/** Share of the turn by which the free edge runs ahead of the spine. */
+	const LEAD = 0.45;
+	/** Points at which each strip's motion is sampled into keyframes. */
+	const SAMPLES = 30;
+	/** Darkest the paper gets when a strip stands edge-on to the light. */
+	const MAX_SHADE = 0.42;
+
+	/** Slice of the front face a strip shows, counted from the page's left. */
+	const frontSlice = (index: number) => (direction === 'next' ? index : STRIPS - 1 - index);
+	/** The back is seen from the other side, so its slices run the other way. */
+	const backSlice = (index: number) => STRIPS - 1 - frontSlice(index);
+
+	const easeInOut = (q: number) => (q < 0.5 ? 2 * q * q : 1 - (-2 * q + 2) ** 2 / 2);
+	/** How far strip `index` has turned (0–180°) at `progress` of the turn. */
+	function turned(index: number, progress: number): number {
+		const fromSpine = index / (STRIPS - 1);
+		const local = progress * (1 + LEAD) - LEAD * (1 - fromSpine);
+		return 180 * easeInOut(Math.min(1, Math.max(0, local)));
 	}
+	/** The moment a strip stands edge-on and its faces change places. */
+	const edgeOnAt = (index: number) => (0.5 + LEAD * (1 - index / (STRIPS - 1))) / (1 + LEAD);
+
+	let stripNodes = $state<HTMLElement[]>([]);
+
+	onMount(() => {
+		const sign = direction === 'next' ? -1 : 1;
+		const timing: KeyframeAnimationOptions = {
+			duration: DURATION,
+			fill: 'both',
+			direction: reverse ? 'reverse' : 'normal'
+		};
+		const offsets = Array.from({ length: SAMPLES + 1 }, (_, sample) => sample / SAMPLES);
+
+		const animations = stripNodes.flatMap((node, index) => {
+			// Each strip rotates on top of the one it hangs from.
+			const bend = (progress: number) =>
+				turned(index, progress) - (index > 0 ? turned(index - 1, progress) : 0);
+			const swap = edgeOnAt(index);
+			const faces = (visibleFirst: boolean): Keyframe[] => [
+				{ offset: 0, opacity: visibleFirst ? 1 : 0, easing: 'steps(1, end)' },
+				{ offset: swap, opacity: visibleFirst ? 0 : 1 },
+				{ offset: 1, opacity: visibleFirst ? 0 : 1 }
+			];
+			return [
+				node.animate(
+					offsets.map((offset) => ({
+						offset,
+						transform: `rotateY(${(sign * bend(offset)).toFixed(2)}deg)`
+					})),
+					timing
+				),
+				node.querySelector(':scope > .face--front')!.animate(faces(true), timing),
+				node.querySelector(':scope > .face--back')!.animate(faces(false), timing),
+				...[...node.querySelectorAll(':scope > .face > .shade')].map((shade) =>
+					shade.animate(
+						offsets.map((offset) => ({
+							offset,
+							opacity: MAX_SHADE * Math.sin((turned(index, offset) * Math.PI) / 180)
+						})),
+						timing
+					)
+				)
+			];
+		});
+
+		let cancelled = false;
+		Promise.all(animations.map((animation) => animation.finished))
+			.then(() => {
+				if (!cancelled) onEnd();
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+			for (const animation of animations) animation.cancel();
+		};
+	});
 </script>
+
+{#snippet strip(index: number)}
+	<div bind:this={stripNodes[index]} class="strip" class:strip--first={index === 0}>
+		<div class="face face--front">
+			<div
+				class="slice"
+				style:width={`${STRIPS * 100}%`}
+				style:left={`${-frontSlice(index) * 100}%`}
+			>
+				<FaceView face={frontPage} side={frontSide} {sizes} />
+			</div>
+			<div class="shade"></div>
+		</div>
+		<div class="face face--back">
+			{#if backPage}
+				<div
+					class="slice"
+					style:width={`${STRIPS * 100}%`}
+					style:left={`${-backSlice(index) * 100}%`}
+				>
+					<FaceView face={backPage} side={backSide} {sizes} />
+				</div>
+			{/if}
+			<div class="shade"></div>
+		</div>
+		{#if index < STRIPS - 1}
+			{@render strip(index + 1)}
+		{/if}
+	</div>
+{/snippet}
 
 <div
 	class="leaf"
 	class:leaf-next={direction === 'next'}
 	class:leaf-prev={direction === 'prev'}
-	class:leaf-reverse={reverse}
-	onanimationend={handleAnimationEnd}
+	style:--strip-w={`${100 / STRIPS}%`}
 >
-	<div class="face face--front">
-		<FaceView face={frontPage} side={frontSide} {sizes} />
-	</div>
-	<div class="face face--back">
-		{#if backPage}
-			<FaceView face={backPage} side={backSide} {sizes} />
-		{/if}
-	</div>
+	{@render strip(0)}
 </div>
 
 <style>
@@ -69,140 +164,67 @@
 		inset: 0;
 		z-index: 20;
 		transform-style: preserve-3d;
+		/* The leaf is decorative while turning; taps belong to the page beneath. */
+		pointer-events: none;
 	}
 
-	.leaf {
-		--leaf-dur: 700ms;
-		/* Symmetric on purpose: at 50% of the animation the leaf is
-		   exactly edge-on (90°), which is where the two faces swap. */
-		--leaf-ease: cubic-bezier(0.45, 0, 0.55, 1);
+	/* A strip hangs from the far edge of the one before it, spine first. */
+	.strip {
+		position: absolute;
+		top: 0;
+		width: 100%;
+		height: 100%;
+		transform-style: preserve-3d;
 	}
-
-	.leaf-next {
+	.strip--first {
+		width: var(--strip-w);
+	}
+	.leaf-next .strip {
+		left: 100%;
 		transform-origin: left center;
-		animation: leaf-next var(--leaf-dur) var(--leaf-ease) both;
 	}
-	.leaf-prev {
+	.leaf-prev .strip {
+		right: 100%;
 		transform-origin: right center;
-		animation: leaf-prev var(--leaf-dur) var(--leaf-ease) both;
 	}
-
-	@keyframes leaf-next {
-		from {
-			transform: rotateY(0deg);
-		}
-		to {
-			transform: rotateY(-180deg);
-		}
+	.leaf-next .strip--first {
+		left: 0;
 	}
-	@keyframes leaf-prev {
-		from {
-			transform: rotateY(0deg);
-		}
-		to {
-			transform: rotateY(180deg);
-		}
+	.leaf-prev .strip--first {
+		right: 0;
 	}
 
 	/**
-	 * The two faces are swapped by opacity, not by `backface-visibility`.
-	 * (Opacity, not visibility, so the hidden face is already painted when
-	 * its turn comes and never shows blank for a frame.)
-	 * Chromium decides an element's facing from its own transform only, so
-	 * the face carrying the 180° pre-rotation gets culled even while it is
-	 * the one turned toward you — and the face with no pre-rotation is never
-	 * culled, so you get the outgoing page mirrored on the back. Swapping
-	 * explicitly at the edge-on moment (50%, thanks to the symmetric easing)
-	 * is exact at every angle and every browser.
+	 * The two faces change places by opacity, not by `backface-visibility`:
+	 * Chromium culls the pre-rotated face even while it is the one turned
+	 * toward you. Opacity also keeps the hidden face painted, so it never
+	 * shows blank for a frame when its turn comes.
 	 */
 	.face {
 		position: absolute;
-		inset: 0;
+		/* A hair wider than the strip, so no seam shows between neighbours. */
+		inset: 0 -0.5px;
 		overflow: hidden;
-		/* The leaf is decorative while turning; taps belong to the page
-		   underneath (and input is locked mid-flip anyway). */
-		pointer-events: none;
-	}
-	.face--front {
-		animation: face-front var(--leaf-dur) var(--leaf-ease) both;
 	}
 	.face--back {
 		/* Blank paper when the sheet has nothing printed on its reverse. */
 		background: #f3ead6;
 		opacity: 0;
 		transform: rotateY(180deg);
-		animation: face-back var(--leaf-dur) var(--leaf-ease) both;
 	}
 
-	@keyframes face-front {
-		0%,
-		49.99% {
-			opacity: 1;
-		}
-		50%,
-		100% {
-			opacity: 0;
-		}
-	}
-	@keyframes face-back {
-		0%,
-		49.99% {
-			opacity: 0;
-		}
-		50%,
-		100% {
-			opacity: 1;
-		}
+	/* The whole page, of which the face shows one strip's worth. */
+	.slice {
+		position: absolute;
+		top: 0;
+		height: 100%;
 	}
 
-	.leaf-reverse,
-	.leaf-reverse .face,
-	.leaf-reverse .face::after {
-		animation-direction: reverse;
-	}
-
-	/* Shading near the spine side of each face. */
-	.face::after {
-		content: '';
+	/* Paper darkens as it turns away from the light. */
+	.shade {
 		position: absolute;
 		inset: 0;
-		pointer-events: none;
-		z-index: 30;
-	}
-	.leaf-next .face--front::after {
-		background: linear-gradient(to right, rgba(6, 8, 20, 0.6), transparent 52%);
-	}
-	.leaf-next .face--back::after,
-	.leaf-prev .face--front::after {
-		background: linear-gradient(to left, rgba(6, 8, 20, 0.6), transparent 52%);
-	}
-	.leaf-prev .face--back::after {
-		background: linear-gradient(to right, rgba(6, 8, 20, 0.6), transparent 52%);
-	}
-
-	.leaf-next .face--front::after,
-	.leaf-prev .face--front::after {
-		animation: shade-deepen 700ms ease both;
-	}
-	.leaf-next .face--back::after,
-	.leaf-prev .face--back::after {
-		animation: shade-soften 700ms ease both;
-	}
-
-	@keyframes shade-deepen {
-		from {
-			opacity: 0.14;
-		}
-		to {
-			opacity: 0.5;
-		}
-	}
-	@keyframes shade-soften {
-		from {
-			opacity: 0.4;
-		}
-		to {
-			opacity: 0.18;
-		}
+		background: rgb(16, 9, 2);
+		opacity: 0;
 	}
 </style>

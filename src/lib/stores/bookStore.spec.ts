@@ -244,9 +244,11 @@ describe('BookStore position model', () => {
 
 			// Ignored mid-turn: the turn in flight keeps its target.
 			store.completeTransition();
+			store.spreadIndex = 1;
 			store.next();
 			store.goToCover();
-			expect(store.pending).toEqual({ spreadIndex: 1, side: 'left' });
+			expect(store.pending).toEqual({ spreadIndex: 2, side: 'left' });
+			expect(store.flipDirection).toBe('next');
 		});
 
 		it('switching to a phone never lands on an empty side', () => {
@@ -306,7 +308,10 @@ describe('BookStore position model', () => {
 			store.completeTransition();
 			expect(backing.get('parque_position')).toBe(JSON.stringify({ spread: 2, side: 'left' }));
 
-			const restored = new BookStore();
+			// A new store starts on the cover until it is told to restore.
+			const restored = makeStore();
+			expect(restored.spreadIndex).toBe(0);
+			restored.restorePosition();
 			expect(restored.spreadIndex).toBe(2);
 			expect(restored.side).toBe('left');
 		});
@@ -316,16 +321,30 @@ describe('BookStore position model', () => {
 				plateia_position: JSON.stringify({ spread: 2, side: 'right' }),
 				plateia_page_index: '7'
 			});
-			const store = new BookStore();
+			const store = makeStore();
+			store.restorePosition();
 			expect(store.spreadIndex).toBe(0);
 			expect(store.side).toBe('left');
 		});
 
 		it('ignores a malformed saved position', () => {
 			installStorage({ parque_position: 'not json' });
-			const store = new BookStore();
+			const store = makeStore();
+			store.restorePosition();
 			expect(store.spreadIndex).toBe(0);
 			expect(store.side).toBe('left');
+		});
+
+		it('a saved position on an empty side or past the end is brought back into the book', () => {
+			installStorage({ parque_position: JSON.stringify({ spread: 0, side: 'left' }) });
+			const onEmptySide = makeStore(BOOK);
+			onEmptySide.restorePosition();
+			expect(position(onEmptySide)).toEqual(COVER);
+
+			installStorage({ parque_position: JSON.stringify({ spread: 40, side: 'right' }) });
+			const pastTheEnd = makeStore(BOOK);
+			pastTheEnd.restorePosition();
+			expect(position(pastTheEnd)).toEqual(BACK_COVER);
 		});
 	});
 });
